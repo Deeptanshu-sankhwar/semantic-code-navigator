@@ -1,0 +1,15 @@
+click>=8.0.0
+mindsdb-sdk>=1.4.0
+python-dotenv>=1.0.0
+rich>=13.0.0
+pathlib>=1.0.0
+gitpython>=3.1.0
+tree-sitter>=0.20.0
+tree-sitter-python>=0.20.0
+tree-sitter-javascript>=0.20.0
+tree-sitter-java>=0.20.0
+tree-sitter-go>=0.20.0
+tree-sitter-rust>=0.20.0
+requests>=2.28.0
+tqdm>=4.64.0
+pandas>=1.5.0 
