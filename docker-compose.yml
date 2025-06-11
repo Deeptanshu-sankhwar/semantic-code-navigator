@@ -1,0 +1,25 @@
+version: '3.8'
+
+services:
+  mindsdb:
+    image: mindsdb/mindsdb:latest
+    container_name: mindsdb-server
+    ports:
+      - "47334:47334"  # MindsDB HTTP API
+      - "47335:47335"  # MindsDB MySQL API
+    environment:
+      - MINDSDB_DB_SERVICE_HOST=0.0.0.0
+      - MINDSDB_DB_SERVICE_PORT=47334
+    volumes:
+      - mindsdb_data:/root/mindsdb_storage
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:47334/api/status"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
+
+volumes:
+  mindsdb_data:
+    driver: local 
