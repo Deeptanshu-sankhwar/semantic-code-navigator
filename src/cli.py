@@ -529,6 +529,135 @@ def ingest_codebase(repo_url: str, branch: str, extensions: str, exclude_dirs: s
         sys.exit(1)
 
 
+@cli.command("kb:sync")
+@click.argument("repo_url", required=True)
+@click.option("--branch", "-b", default="main", help="Git branch to sync (default: main)")
+@click.option("--schedule", "-s", default="EVERY 6 HOURS", help="Job schedule (default: EVERY 6 HOURS)")
+@click.option("--force", is_flag=True, help="Force recreate sync job if exists")
+def create_sync_job(repo_url: str, branch: str, schedule: str, force: bool):
+    """Create a scheduled job to sync repository changes every 6 hours."""
+    console.print(Panel.fit(
+        f"[bold blue]Repository Sync Job[/bold blue]\n"
+        f"Repository: [italic]{repo_url}[/italic]\n"
+        f"Schedule: [italic]{schedule}[/italic]",
+        border_style="blue"
+    ))
+    
+    if not (repo_url.startswith("https://") or repo_url.startswith("git@")):
+        console.print("Invalid repository URL. Must start with 'https://' or 'git@'", style="red")
+        sys.exit(1)
+    
+    try:
+        with MindsDBClient() as client:
+            if not client.server:
+                console.print("Failed to connect to MindsDB", style="red")
+                sys.exit(1)
+            
+            job_name = f"sync_{repo_url.replace('/', '_').replace(':', '_')}"
+            
+            if force:
+                client.delete_sync_job(job_name)
+            
+            success = client.create_sync_job(
+                repo_url=repo_url,
+                branch=branch,
+                schedule=schedule
+            )
+            
+            if success:
+                console.print(f"\nSync job created successfully!", style="bold green")
+                console.print(f"Repository: {repo_url}")
+                console.print(f"Branch: {branch}")
+                console.print(f"Schedule: {schedule}")
+                console.print("\nThe job will automatically sync new changes every 6 hours", style="blue")
+            else:
+                console.print(f"\nFailed to create sync job", style="bold red")
+                sys.exit(1)
+                
+    except Exception as e:
+        console.print(f"Sync job creation failed: {e}", style="red")
+        sys.exit(1)
+
+
+@cli.command("kb:sync:list")
+def list_sync_jobs():
+    """List all repository sync jobs and their status."""
+    console.print(Panel.fit(
+        "[bold blue]Repository Sync Jobs[/bold blue]\n"
+        "List of active sync jobs",
+        border_style="blue"
+    ))
+    
+    try:
+        with MindsDBClient() as client:
+            if not client.server:
+                console.print("Failed to connect to MindsDB", style="red")
+                sys.exit(1)
+            
+            jobs = client.list_sync_jobs()
+            
+            if not jobs:
+                console.print("No sync jobs found", style="yellow")
+                return
+            
+            table = Table(show_header=True, header_style="bold magenta")
+            table.add_column("Job Name", style="cyan")
+            table.add_column("Schedule", style="green")
+            table.add_column("Status", style="yellow")
+            table.add_column("Last Run", style="blue")
+            table.add_column("Next Run", style="magenta")
+            
+            for job in jobs:
+                table.add_row(
+                    job['name'],
+                    job['schedule'],
+                    job['status'],
+                    job['last_run'],
+                    job['next_run']
+                )
+            
+            console.print(table)
+            
+    except Exception as e:
+        console.print(f"Failed to list sync jobs: {e}", style="red")
+        sys.exit(1)
+
+
+@cli.command("kb:sync:delete")
+@click.argument("job_name", required=True)
+@click.option("--force", is_flag=True, help="Skip confirmation prompt")
+def delete_sync_job(job_name: str, force: bool):
+    """Delete a repository sync job."""
+    console.print(Panel.fit(
+        f"[bold red]Delete Sync Job[/bold red]\n"
+        f"Job: [italic]{job_name}[/italic]",
+        border_style="red"
+    ))
+    
+    try:
+        with MindsDBClient() as client:
+            if not client.server:
+                console.print("Failed to connect to MindsDB", style="red")
+                sys.exit(1)
+            
+            if not force:
+                if not click.confirm("\nAre you sure you want to delete this sync job?"):
+                    console.print("Deletion cancelled", style="yellow")
+                    return
+            
+            success = client.delete_sync_job(job_name)
+            
+            if success:
+                console.print(f"\nSync job deleted successfully!", style="bold green")
+            else:
+                console.print(f"\nFailed to delete sync job", style="bold red")
+                sys.exit(1)
+                
+    except Exception as e:
+        console.print(f"Sync job deletion failed: {e}", style="red")
+        sys.exit(1)
+
+
 def _display_search_results(results: list, output_format: str, query: str, 
                           filters: Dict[str, Any], relevance_threshold: float):
     """Display search results in the specified format."""
@@ -539,7 +668,7 @@ def _display_search_results(results: list, output_format: str, query: str,
             console.print(f"{i}. [bold]{result.get('filepath', 'N/A')}[/bold]")
             console.print(f"   {result.get('chunk_content', '')[:100]}...")
             console.print(f"   Relevance: {result.get('relevance', 0):.3f}\n")
-    else:  # table format
+    else:
         table = Table(show_header=True, header_style="bold magenta")
         table.add_column("Rank", style="cyan", width=4)
         table.add_column("File", style="green", width=25)
