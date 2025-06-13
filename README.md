@@ -179,16 +179,16 @@ python main.py kb:schema
 
 ### 8. Manage Repository Sync Jobs
 
-Automatically sync repository changes every 6 hours:
+Create scheduled jobs to automatically sync repository changes:Build a multi-step workflow within MindsDB by taking the results from a KB semantic query and feeding them as input into another 🔗 MindsDB AI Table (e.g., for summarisation, classification, generation).
 
 ```bash
 # Create a sync job for a repository
 python main.py kb:sync https://github.com/org/repo-name.git
 
-# Create with custom schedule
+# Create a sync job with custom schedule
 python main.py kb:sync https://github.com/org/repo.git --schedule "EVERY 12 HOURS"
 
-# Force recreate existing job
+# Force recreate an existing job
 python main.py kb:sync https://github.com/org/repo.git --force
 
 # List all sync jobs
@@ -203,11 +203,84 @@ python main.py kb:sync:delete sync_github_com_org_repo_git
 - `--schedule, -s`: Job schedule (default: EVERY 6 HOURS)
 - `--force`: Force recreate sync job if exists
 
-The sync job will:
-1. Track the last sync timestamp for each repository
-2. Only ingest new changes since the last sync
+**How Sync Jobs Work:**
+1. Track the last sync timestamp
+2. Ingest new changes since last sync
 3. Run automatically every 6 hours
-4. Update the knowledge base with new code
+4. Update knowledge base with new code
+
+
+### 9. AI-Powered Code Analysis
+
+Use AI tables to analyze and understand code with natural language:
+
+```bash
+# Initialize AI tables (one-time setup)
+python main.py ai:init
+
+# Analyze code with all AI capabilities
+python main.py ai:analyze "def authenticate_user(username, password): return username == 'admin'" --all
+
+# Classify code purpose only
+python main.py ai:analyze "def calculate_tax(amount): return amount * 0.1" --classify
+
+# Get code explanation
+python main.py ai:analyze "def fibonacci(n): return n if n <= 1 else fibonacci(n-1) + fibonacci(n-2)" --explain
+
+# Generate docstring
+python main.py ai:analyze "def process_data(data): return [x*2 for x in data]" --docstring
+
+# Suggest test cases
+python main.py ai:analyze "def validate_email(email): return '@' in email" --tests
+
+# Check AI tables status
+python main.py ai:list
+
+# Reset all AI tables
+python main.py ai:reset
+```
+
+**AI Analysis Capabilities:**
+- **Code Classification**: Categorizes functions (auth, utility, api handler, etc.)
+- **Natural Language Explanation**: Explains code in simple English
+- **Docstring Generation**: Creates documentation for undocumented functions
+- **Test Case Suggestions**: Recommends test scenarios for functions
+- **Search Result Rationale**: Explains why code matches search queries
+
+**AI Tables Created:**
+- `code_classifier` - Classifies code purpose
+- `code_explainer` - Explains functions in simple English  
+- `docstring_generator` - Generates docstrings
+- `test_case_outliner` - Suggests test cases
+- `result_rationale` - Explains search matches
+
+### 10. AI Workflow Demo
+
+Experience the complete AI-enhanced semantic search workflow with dedicated demo commands:
+
+```bash
+# Run complete AI workflow demonstration
+python demo.py workflow "decorator function" --limit 3
+
+# Create SQL view that joins KB with AI tables
+python demo.py create-view
+
+# Query the integrated workflow view
+python demo.py query-view --limit 5
+```
+
+**Workflow Demo Features:**
+- **Complete Pipeline**: Demonstrates KB search → AI analysis → unified results
+- **Step-by-Step Output**: Shows each stage of the multi-step workflow
+- **SQL View Integration**: Creates reusable views joining KB with AI tables
+- **Professional Presentation**: Clean output suitable for demonstrations
+
+**Demo Commands:**
+- `workflow` - Complete AI workflow with semantic search + AI analysis
+- `create-view` - Create SQL view demonstrating KB + AI table integration
+- `query-view` - Query the integrated workflow view for combined results
+
+The demo module showcases the full power of MindsDB's multi-step workflows, taking semantic search results and enriching them with AI table analysis in a single, streamlined process.
 
 
 ## Architecture
@@ -223,7 +296,13 @@ The sync job will:
 │  ├── kb:index    - Create Performance Index                │
 │  ├── kb:status   - Show Statistics & Record Count          │
 │  ├── kb:schema   - View Knowledge Base Structure           │
-│  └── kb:reset    - Clear All Data & Start Fresh           │
+│  ├── kb:reset    - Clear All Data & Start Fresh           │
+│  ├── kb:sync     - Create Repository Sync Jobs             │
+│  ├── kb:sync:*   - Manage Sync Jobs (list, delete)        │
+│  ├── ai:init     - Initialize AI Tables                    │
+│  ├── ai:analyze  - Analyze Code with AI                    │
+│  ├── ai:list     - List AI Tables Status                   │
+│  └── ai:reset    - Reset AI Tables                         │
 ├─────────────────────────────────────────────────────────────┤
 │  MindsDB Client (Python SDK)                               │
 │  ├── Connection Management                                 │
@@ -236,6 +315,13 @@ The sync job will:
 │  ├── OpenAI Reranking (gpt-4o)                            │
 │  ├── Vector Storage & Indexing                             │
 │  └── Metadata Filtering                                    │
+├─────────────────────────────────────────────────────────────┤
+│  AI Tables (Generative AI Models)                          │
+│  ├── code_classifier - Code Purpose Classification         │
+│  ├── code_explainer - Natural Language Explanations       │
+│  ├── docstring_generator - Documentation Generation        │
+│  ├── test_case_outliner - Test Case Suggestions           │
+│  └── result_rationale - Search Match Explanations         │
 ├─────────────────────────────────────────────────────────────┤
 │  Git Repository Ingestion Pipeline                         │
 │  ├── Git Cloning & Repository Discovery                    │
