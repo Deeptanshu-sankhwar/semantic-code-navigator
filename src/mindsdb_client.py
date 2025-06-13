@@ -8,6 +8,7 @@ from rich.table import Table
 import json
 import pandas as pd
 from datetime import datetime
+import time
 
 from .config import config
 from .code_ingestion import CodeIngestionEngine
@@ -523,6 +524,446 @@ class MindsDBClient:
         except Exception as e:
             console.print(f"Failed to delete sync job: {e}", style="red")
             return False
+    
+    def create_single_ai_table(self, table_name: str, predict_column: str, prompt_template: str) -> bool:
+        """Create a single AI table with retry logic."""
+        try:
+            console.print(f"Creating AI table: {table_name}", style="blue")
+            
+            create_model_query = f"""
+            CREATE MODEL {table_name}
+            PREDICT {predict_column}
+            USING
+                engine = 'openai',
+                model_name = 'gpt-3.5-turbo',
+                openai_api_key = '{config.kb.openai_api_key}',
+                prompt_template = '{prompt_template}';
+            """
+            
+            self.execute_query(create_model_query)
+            console.print(f"Created AI table: {table_name}", style="green")
+            return True
+            
+        except Exception as e:
+            if "already exists" in str(e).lower():
+                console.print(f"AI table already exists: {table_name}", style="yellow")
+                return True
+            else:
+                console.print(f"Failed to create AI table {table_name}: {e}", style="red")
+                return False
+    
+    def create_ai_tables_individually(self) -> bool:
+        """Create AI tables one by one with better error handling."""
+        try:
+            ai_tables = [
+                {
+                    "name": "code_classifier",
+                    "predict": "purpose",
+                    "prompt": 'Classify the purpose of the following function in one or two words: {{code_chunk}}'
+                },
+                {
+                    "name": "code_explainer", 
+                    "predict": "explanation",
+                    "prompt": 'Explain this function in simple English: {{code_chunk}}'
+                },
+                {
+                    "name": "docstring_generator",
+                    "predict": "docstring", 
+                    "prompt": 'Generate a docstring for the following function: {{code_chunk}}'
+                },
+                {
+                    "name": "test_case_outliner",
+                    "predict": "test_plan",
+                    "prompt": 'Suggest 3 test cases (just names) for this function: {{code_chunk}}'
+                },
+                {
+                    "name": "result_rationale",
+                    "predict": "rationale",
+                    "prompt": 'Given this code and the search query "{{search_query}}", explain why this function was a match: {{code_chunk}}'
+                }
+            ]
+            
+            success_count = 0
+            
+            for table in ai_tables:
+                try:
+                    if self.create_single_ai_table(table['name'], table['predict'], table['prompt']):
+                        success_count += 1
+                    
+                    time.sleep(2)
+                    
+                except Exception as e:
+                    console.print(f"Error creating {table['name']}: {e}", style="red")
+                    continue
+            
+            console.print(f"Successfully created {success_count}/5 AI tables", style="bold green" if success_count == 5 else "yellow")
+            return success_count == 5
+            
+        except Exception as e:
+            console.print(f"Failed to create AI tables: {e}", style="red")
+            return False
+    
+    def create_ai_tables(self) -> bool:
+        """Create AI tables for code analysis using OpenAI models."""
+        return self.create_ai_tables_individually()
+    
+    def list_ai_tables(self) -> List[str]:
+        """List all AI tables (models) in MindsDB."""
+        try:
+            query = "SHOW MODELS;"
+            models = self.execute_query(query)
+            
+            ai_table_names = ["code_classifier", "code_explainer", "docstring_generator", 
+                             "test_case_outliner", "result_rationale"]
+            
+            existing_tables = []
+            for model in models:
+                model_name = model.get('name', model.get('NAME', ''))
+                if model_name in ai_table_names:
+                    existing_tables.append(model_name)
+            
+            return existing_tables
+            
+        except Exception as e:
+            console.print(f"Failed to list AI tables: {e}", style="red")
+            return []
+    
+    def drop_ai_tables(self) -> bool:
+        """Drop all AI tables for code analysis."""
+        try:
+            ai_table_names = ["code_classifier", "code_explainer", "docstring_generator", 
+                             "test_case_outliner", "result_rationale"]
+            
+            for table_name in ai_table_names:
+                try:
+                    drop_query = f"DROP MODEL {table_name};"
+                    self.execute_query(drop_query)
+                    console.print(f"Dropped AI table: {table_name}", style="green")
+                except Exception as e:
+                    if "does not exist" in str(e).lower():
+                        console.print(f"AI table doesn't exist: {table_name}", style="yellow")
+                    else:
+                        console.print(f"Failed to drop AI table {table_name}: {e}", style="red")
+            
+            console.print("AI tables cleanup completed!", style="bold green")
+            return True
+            
+        except Exception as e:
+            console.print(f"Failed to drop AI tables: {e}", style="red")
+            return False
+    
+    def classify_code_purpose(self, code_chunk: str) -> str:
+        """Classify the purpose of a code chunk using the code_classifier AI table.
+        
+        Args:
+            code_chunk: The code to classify
+            
+        Returns:
+            Purpose classification as a string
+        """
+        try:
+            query = f"""
+            SELECT purpose
+            FROM code_classifier
+            WHERE code_chunk = '{code_chunk.replace("'", "''")}';
+            """
+            
+            result = self.execute_query(query)
+            if result and len(result) > 0:
+                return result[0].get('purpose', 'unknown')
+            return 'unknown'
+            
+        except Exception as e:
+            console.print(f"Failed to classify code purpose: {e}", style="red")
+            return 'unknown'
+    
+    def explain_code(self, code_chunk: str) -> str:
+        """Explain a code chunk using the code_explainer AI table.
+        
+        Args:
+            code_chunk: The code to explain
+            
+        Returns:
+            Code explanation as a string
+        """
+        try:
+            query = f"""
+            SELECT explanation
+            FROM code_explainer
+            WHERE code_chunk = '{code_chunk.replace("'", "''")}';
+            """
+            
+            result = self.execute_query(query)
+            if result and len(result) > 0:
+                return result[0].get('explanation', 'No explanation available')
+            return 'No explanation available'
+            
+        except Exception as e:
+            console.print(f"Failed to explain code: {e}", style="red")
+            return 'No explanation available'
+    
+    def generate_docstring(self, code_chunk: str) -> str:
+        """Generate a docstring for a code chunk using the docstring_generator AI table.
+        
+        Args:
+            code_chunk: The code to generate docstring for
+            
+        Returns:
+            Generated docstring as a string
+        """
+        try:
+            query = f"""
+            SELECT docstring
+            FROM docstring_generator
+            WHERE code_chunk = '{code_chunk.replace("'", "''")}';
+            """
+            
+            result = self.execute_query(query)
+            if result and len(result) > 0:
+                return result[0].get('docstring', 'No docstring generated')
+            return 'No docstring generated'
+            
+        except Exception as e:
+            console.print(f"Failed to generate docstring: {e}", style="red")
+            return 'No docstring generated'
+    
+    def suggest_test_cases(self, code_chunk: str) -> str:
+        """Suggest test cases for a code chunk using the test_case_outliner AI table.
+        
+        Args:
+            code_chunk: The code to suggest test cases for
+            
+        Returns:
+            Test case suggestions as a string
+        """
+        try:
+            query = f"""
+            SELECT test_plan
+            FROM test_case_outliner
+            WHERE code_chunk = '{code_chunk.replace("'", "''")}';
+            """
+            
+            result = self.execute_query(query)
+            if result and len(result) > 0:
+                return result[0].get('test_plan', 'No test cases suggested')
+            return 'No test cases suggested'
+            
+        except Exception as e:
+            console.print(f"Failed to suggest test cases: {e}", style="red")
+            return 'No test cases suggested'
+    
+    def explain_search_match(self, code_chunk: str, search_query: str) -> str:
+        """Explain why a code chunk matches a search query using the result_rationale AI table.
+        
+        Args:
+            code_chunk: The code that was found
+            search_query: The original search query
+            
+        Returns:
+            Explanation of why the code matches the query
+        """
+        try:
+            query = f"""
+            SELECT rationale
+            FROM result_rationale
+            WHERE code_chunk = '{code_chunk.replace("'", "''")}'
+            AND search_query = '{search_query.replace("'", "''")}';
+            """
+            
+            result = self.execute_query(query)
+            if result and len(result) > 0:
+                return result[0].get('rationale', 'No explanation available')
+            return 'No explanation available'
+            
+        except Exception as e:
+            console.print(f"Failed to explain search match: {e}", style="red")
+            return 'No explanation available'
+    
+    def semantic_search_with_ai_analysis(self, query: str, filters: Optional[Dict[str, Any]] = None, 
+                                       limit: int = 10, relevance_threshold: float = 0.0,
+                                       analyze_purpose: bool = False, analyze_explanation: bool = False,
+                                       analyze_docstring: bool = False, analyze_tests: bool = False) -> List[Dict[str, Any]]:
+        """Perform semantic search and analyze results with AI tables in a single workflow."""
+        try:
+            search_results = self.semantic_search(query, filters, limit, relevance_threshold)
+            
+            if not search_results:
+                return []
+            
+            available_ai_tables = self.list_ai_tables()
+            console.print(f"Available AI tables: {', '.join(available_ai_tables)}", style="dim")
+            
+            enriched_results = []
+            
+            for result in search_results:
+                code_chunk = result.get('chunk_content', '')
+                if not code_chunk.strip():
+                    enriched_results.append(result)
+                    continue
+                
+                enriched_result = result.copy()
+                
+                if analyze_purpose and 'code_classifier' in available_ai_tables:
+                    try:
+                        purpose_query = f"""
+                        SELECT purpose
+                        FROM code_classifier
+                        WHERE code_chunk = '{code_chunk.replace("'", "''")}';
+                        """
+                        purpose_result = self.execute_query(purpose_query)
+                        if purpose_result and len(purpose_result) > 0:
+                            enriched_result['ai_purpose'] = purpose_result[0].get('purpose', 'unknown')
+                        else:
+                            enriched_result['ai_purpose'] = 'unknown'
+                    except Exception as e:
+                        console.print(f"Warning: Purpose classification failed: {e}", style="yellow")
+                        enriched_result['ai_purpose'] = 'error'
+                elif analyze_purpose:
+                    enriched_result['ai_purpose'] = 'unavailable (table not created)'
+                
+                if analyze_explanation and 'code_explainer' in available_ai_tables:
+                    try:
+                        explanation_query = f"""
+                        SELECT explanation
+                        FROM code_explainer
+                        WHERE code_chunk = '{code_chunk.replace("'", "''")}';
+                        """
+                        explanation_result = self.execute_query(explanation_query)
+                        if explanation_result and len(explanation_result) > 0:
+                            enriched_result['ai_explanation'] = explanation_result[0].get('explanation', 'No explanation available')
+                        else:
+                            enriched_result['ai_explanation'] = 'No explanation available'
+                    except Exception as e:
+                        console.print(f"Warning: Code explanation failed: {e}", style="yellow")
+                        enriched_result['ai_explanation'] = 'error'
+                elif analyze_explanation:
+                    enriched_result['ai_explanation'] = 'unavailable (table not created)'
+                
+                if analyze_docstring and 'docstring_generator' in available_ai_tables:
+                    try:
+                        docstring_query = f"""
+                        SELECT docstring
+                        FROM docstring_generator
+                        WHERE code_chunk = '{code_chunk.replace("'", "''")}';
+                        """
+                        docstring_result = self.execute_query(docstring_query)
+                        if docstring_result and len(docstring_result) > 0:
+                            enriched_result['ai_docstring'] = docstring_result[0].get('docstring', 'No docstring generated')
+                        else:
+                            enriched_result['ai_docstring'] = 'No docstring generated'
+                    except Exception as e:
+                        console.print(f"Warning: Docstring generation failed: {e}", style="yellow")
+                        enriched_result['ai_docstring'] = 'error'
+                elif analyze_docstring:
+                    enriched_result['ai_docstring'] = 'unavailable (table not created)'
+                
+                if analyze_tests and 'test_case_outliner' in available_ai_tables:
+                    try:
+                        tests_query = f"""
+                        SELECT test_plan
+                        FROM test_case_outliner
+                        WHERE code_chunk = '{code_chunk.replace("'", "''")}';
+                        """
+                        tests_result = self.execute_query(tests_query)
+                        if tests_result and len(tests_result) > 0:
+                            enriched_result['ai_test_cases'] = tests_result[0].get('test_plan', 'No test cases suggested')
+                        else:
+                            enriched_result['ai_test_cases'] = 'No test cases suggested'
+                    except Exception as e:
+                        console.print(f"Warning: Test case suggestion failed: {e}", style="yellow")
+                        enriched_result['ai_test_cases'] = 'error'
+                elif analyze_tests:
+                    enriched_result['ai_test_cases'] = 'unavailable (table not created)'
+                
+                if 'result_rationale' in available_ai_tables:
+                    try:
+                        rationale_query = f"""
+                        SELECT rationale
+                        FROM result_rationale
+                        WHERE code_chunk = '{code_chunk.replace("'", "''")}'
+                        AND search_query = '{query.replace("'", "''")}';
+                        """
+                        rationale_result = self.execute_query(rationale_query)
+                        if rationale_result and len(rationale_result) > 0:
+                            enriched_result['ai_match_rationale'] = rationale_result[0].get('rationale', 'No rationale available')
+                        else:
+                            enriched_result['ai_match_rationale'] = 'No rationale available'
+                    except Exception as e:
+                        console.print(f"Warning: Search rationale failed: {e}", style="yellow")
+                        enriched_result['ai_match_rationale'] = 'error'
+                else:
+                    enriched_result['ai_match_rationale'] = 'unavailable (table not created)'
+                
+                enriched_results.append(enriched_result)
+            
+            console.print(f"Enhanced {len(enriched_results)} results with AI analysis", style="green")
+            return enriched_results
+            
+        except Exception as e:
+            console.print(f"Workflow search failed: {e}", style="red")
+            return []
+    
+    def create_ai_workflow_view(self) -> bool:
+        """Create a SQL view that combines KB search results with AI table analysis.
+        
+        This creates a reusable view that demonstrates the multi-step workflow
+        by joining the knowledge base with AI tables.
+        
+        Returns:
+            bool: True if view was created successfully
+        """
+        try:
+            # Create a view that joins KB with AI tables for workflow demonstration
+            create_view_query = f"""
+            CREATE OR REPLACE VIEW code_analysis_workflow AS
+            SELECT 
+                kb.chunk_content,
+                kb.filepath,
+                kb.language,
+                kb.function_name,
+                kb.repo,
+                classifier.purpose as ai_purpose,
+                explainer.explanation as ai_explanation,
+                docgen.docstring as ai_docstring,
+                tester.test_plan as ai_test_cases
+            FROM {config.kb.name} kb
+            LEFT JOIN code_classifier classifier ON classifier.code_chunk = kb.chunk_content
+            LEFT JOIN code_explainer explainer ON explainer.code_chunk = kb.chunk_content  
+            LEFT JOIN docstring_generator docgen ON docgen.code_chunk = kb.chunk_content
+            LEFT JOIN test_case_outliner tester ON tester.code_chunk = kb.chunk_content
+            LIMIT 100;
+            """
+            
+            self.execute_query(create_view_query)
+            console.print("Created AI workflow view: code_analysis_workflow", style="green")
+            return True
+            
+        except Exception as e:
+            console.print(f"Failed to create AI workflow view: {e}", style="red")
+            return False
+    
+    def query_ai_workflow_view(self, limit: int = 10) -> List[Dict[str, Any]]:
+        """Query the AI workflow view to demonstrate integrated analysis.
+        
+        Args:
+            limit: Maximum number of results to return
+            
+        Returns:
+            List of results with both KB data and AI analysis
+        """
+        try:
+            query = f"""
+            SELECT * FROM code_analysis_workflow
+            LIMIT {limit};
+            """
+            
+            results = self.execute_query(query)
+            console.print(f"Retrieved {len(results)} results from AI workflow view", style="blue")
+            return results
+            
+        except Exception as e:
+            console.print(f"Failed to query AI workflow view: {e}", style="red")
+            return []
     
     def __enter__(self):
         """Context manager entry."""

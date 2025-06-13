@@ -134,15 +134,26 @@ def init_kb(force: bool, validate_config: bool):
 @click.option("--limit", default=10, help="Maximum number of results")
 @click.option("--relevance-threshold", default=0.0, type=float, help="Minimum relevance score")
 @click.option("--output-format", default="table", type=click.Choice(["table", "json", "compact"]), help="Output format")
+@click.option("--ai-purpose", is_flag=True, help="Add AI purpose classification to results")
+@click.option("--ai-explain", is_flag=True, help="Add AI code explanations to results")
+@click.option("--ai-docstring", is_flag=True, help="Add AI-generated docstrings to results")
+@click.option("--ai-tests", is_flag=True, help="Add AI test case suggestions to results")
+@click.option("--ai-all", is_flag=True, help="Add all AI analysis to results")
 def query_kb(query: str, language: Optional[str], filepath: Optional[str], 
              function: Optional[str], repo: Optional[str], author: Optional[str],
-             since: Optional[str], limit: int, relevance_threshold: float, output_format: str):
+             since: Optional[str], limit: int, relevance_threshold: float, output_format: str,
+             ai_purpose: bool, ai_explain: bool, ai_docstring: bool, ai_tests: bool, ai_all: bool):
     """Perform semantic search with natural language queries and optional metadata filtering."""
     console.print(Panel.fit(
         f"[bold blue]Semantic Search[/bold blue]\n"
         f"Query: [italic]{query}[/italic]",
         border_style="blue"
     ))
+    
+    use_ai_workflow = ai_purpose or ai_explain or ai_docstring or ai_tests or ai_all
+    
+    if use_ai_workflow:
+        console.print("AI-Enhanced Search: Combining KB results with AI table analysis", style="blue")
     
     try:
         filters = {}
@@ -171,20 +182,34 @@ def query_kb(query: str, language: Optional[str], filepath: Optional[str],
             ) as progress:
                 task = progress.add_task("Searching knowledge base...", total=None)
                 
-                results = client.semantic_search(
-                    query=query,
-                    filters=filters,
-                    limit=limit,
-                    relevance_threshold=relevance_threshold
-                )
-                
-                progress.update(task, description=f"Found {len(results)} results")
+                if use_ai_workflow:
+                    # Use the integrated AI workflow
+                    results = client.semantic_search_with_ai_analysis(
+                        query=query,
+                        filters=filters,
+                        limit=limit,
+                        relevance_threshold=relevance_threshold,
+                        analyze_purpose=ai_purpose or ai_all,
+                        analyze_explanation=ai_explain or ai_all,
+                        analyze_docstring=ai_docstring or ai_all,
+                        analyze_tests=ai_tests or ai_all
+                    )
+                    progress.update(task, description=f"Found {len(results)} results with AI analysis")
+                else:
+                    # Use regular semantic search
+                    results = client.semantic_search(
+                        query=query,
+                        filters=filters,
+                        limit=limit,
+                        relevance_threshold=relevance_threshold
+                    )
+                    progress.update(task, description=f"Found {len(results)} results")
             
             if not results:
                 console.print("No results found. Try adjusting your query or filters.", style="yellow")
                 return
             
-            _display_search_results(results, output_format, query, filters, relevance_threshold)
+            _display_search_results(results, output_format, query, filters, relevance_threshold, use_ai_workflow)
             
     except Exception as e:
         console.print(f"Search failed: {e}", style="red")
@@ -323,10 +348,10 @@ def reset_knowledge_base(force: bool):
                 console.print("Failed to recreate knowledge base", style="red")
                 sys.exit(1)
             
-            console.print(f"✅ Knowledge base reset completed successfully!", style="bold green")
-            console.print(f"   • Deleted {total_records:,} records")
-            console.print(f"   • Recreated fresh knowledge base")
-            console.print(f"   • Ready for new ingestion")
+            console.print(f"Knowledge base reset completed successfully!", style="bold green")
+            console.print(f"   Deleted {total_records:,} records")
+            console.print(f"   Recreated fresh knowledge base")
+            console.print(f"   Ready for new ingestion")
             console.print("\nNext step: Use 'kb:ingest <repo_url>' to ingest a repository", style="blue")
             
     except Exception as e:
@@ -658,8 +683,229 @@ def delete_sync_job(job_name: str, force: bool):
         sys.exit(1)
 
 
+@cli.command("ai:init")
+@click.option("--force", is_flag=True, help="Force recreate AI tables if they exist")
+def init_ai_tables(force: bool):
+    """Initialize AI tables for code analysis using OpenAI models."""
+    console.print(Panel.fit(
+        "[bold blue]AI Tables Initialization[/bold blue]\n"
+        "Creating AI tables for code analysis",
+        border_style="blue"
+    ))
+    
+    try:
+        with MindsDBClient() as client:
+            if not client.server:
+                console.print("Failed to connect to MindsDB", style="red")
+                sys.exit(1)
+            
+            if force:
+                console.print("Force flag detected, dropping existing AI tables...", style="yellow")
+                client.drop_ai_tables()
+            
+            with Progress(
+                SpinnerColumn(),
+                TextColumn("[progress.description]{task.description}"),
+                console=console
+            ) as progress:
+                task = progress.add_task("Creating AI tables...", total=None)
+                
+                success = client.create_ai_tables()
+                
+                if success:
+                    progress.update(task, description="AI tables created successfully")
+                    
+                    console.print("\nAI Tables Created:", style="bold")
+                    
+                    ai_table_info = [
+                        ("code_classifier", "Classifies code purpose (auth, utility, api handler, etc.)"),
+                        ("code_explainer", "Explains functions in simple English"),
+                        ("docstring_generator", "Generates docstrings for undocumented functions"),
+                        ("test_case_outliner", "Suggests test cases for functions"),
+                        ("result_rationale", "Explains why search results match queries")
+                    ]
+                    
+                    ai_table = Table(show_header=True, header_style="bold magenta")
+                    ai_table.add_column("AI Table", style="cyan")
+                    ai_table.add_column("Purpose", style="green")
+                    
+                    for name, purpose in ai_table_info:
+                        ai_table.add_row(name, purpose)
+                    
+                    console.print(ai_table)
+                    
+                    console.print(f"\nAI tables are ready for code analysis", style="bold green")
+                    console.print("Next step: Use 'ai:analyze' to analyze code with AI", style="blue")
+                else:
+                    progress.update(task, description="Failed to create AI tables")
+                    sys.exit(1)
+                    
+    except Exception as e:
+        console.print(f"AI tables initialization failed: {e}", style="red")
+        sys.exit(1)
+
+
+@cli.command("ai:list")
+def list_ai_tables():
+    """List all AI tables and their status."""
+    console.print(Panel.fit(
+        "[bold blue]AI Tables Status[/bold blue]\n"
+        "List of available AI tables",
+        border_style="blue"
+    ))
+    
+    try:
+        with MindsDBClient() as client:
+            if not client.server:
+                console.print("Failed to connect to MindsDB", style="red")
+                sys.exit(1)
+            
+            existing_tables = client.list_ai_tables()
+            
+            all_tables = [
+                ("code_classifier", "Classifies code purpose"),
+                ("code_explainer", "Explains functions in simple English"),
+                ("docstring_generator", "Generates docstrings"),
+                ("test_case_outliner", "Suggests test cases"),
+                ("result_rationale", "Explains search matches")
+            ]
+            
+            status_table = Table(show_header=True, header_style="bold magenta")
+            status_table.add_column("AI Table", style="cyan")
+            status_table.add_column("Purpose", style="white")
+            status_table.add_column("Status", style="green")
+            
+            for name, purpose in all_tables:
+                status = "Available" if name in existing_tables else "Not Created"
+                status_style = "green" if name in existing_tables else "red"
+                status_table.add_row(name, purpose, f"[{status_style}]{status}[/{status_style}]")
+            
+            console.print(status_table)
+            
+            if len(existing_tables) == 0:
+                console.print(f"\nNo AI tables found. Run 'ai:init' to create them.", style="yellow")
+            elif len(existing_tables) < 5:
+                console.print(f"\nSome AI tables are missing. Run 'ai:init --force' to recreate all.", style="yellow")
+            else:
+                console.print(f"\nAll AI tables are available!", style="bold green")
+                
+    except Exception as e:
+        console.print(f"Failed to list AI tables: {e}", style="red")
+        sys.exit(1)
+
+
+@cli.command("ai:analyze")
+@click.argument("code_chunk", required=True)
+@click.option("--classify", is_flag=True, help="Classify the code purpose")
+@click.option("--explain", is_flag=True, help="Explain the code in simple English")
+@click.option("--docstring", is_flag=True, help="Generate a docstring")
+@click.option("--tests", is_flag=True, help="Suggest test cases")
+@click.option("--all", "analyze_all", is_flag=True, help="Run all analysis types")
+def analyze_code(code_chunk: str, classify: bool, explain: bool, docstring: bool, tests: bool, analyze_all: bool):
+    """Analyze code using AI tables for various insights."""
+    console.print(Panel.fit(
+        "[bold blue]AI Code Analysis[/bold blue]\n"
+        "Analyzing code with AI tables",
+        border_style="blue"
+    ))
+    
+    if not any([classify, explain, docstring, tests, analyze_all]):
+        console.print("Please specify at least one analysis type or use --all", style="yellow")
+        console.print("Available options: --classify, --explain, --docstring, --tests, --all", style="blue")
+        return
+    
+    try:
+        with MindsDBClient() as client:
+            if not client.server:
+                console.print("Failed to connect to MindsDB", style="red")
+                sys.exit(1)
+            
+            console.print(f"\nCode to analyze:", style="bold")
+            console.print(f"```\n{code_chunk}\n```", style="dim")
+            
+            results_table = Table(show_header=True, header_style="bold magenta")
+            results_table.add_column("Analysis Type", style="cyan", width=15)
+            results_table.add_column("Result", style="green", width=60)
+            
+            if classify or analyze_all:
+                with console.status("Classifying code purpose..."):
+                    purpose = client.classify_code_purpose(code_chunk)
+                    results_table.add_row("Purpose", purpose)
+            
+            if explain or analyze_all:
+                with console.status("Explaining code..."):
+                    explanation = client.explain_code(code_chunk)
+                    results_table.add_row("Explanation", explanation)
+            
+            if docstring or analyze_all:
+                with console.status("Generating docstring..."):
+                    generated_docstring = client.generate_docstring(code_chunk)
+                    results_table.add_row("Docstring", generated_docstring)
+            
+            if tests or analyze_all:
+                with console.status("Suggesting test cases..."):
+                    test_suggestions = client.suggest_test_cases(code_chunk)
+                    results_table.add_row("Test Cases", test_suggestions)
+            
+            console.print("\nAI Analysis Results:", style="bold")
+            console.print(results_table)
+                    
+    except Exception as e:
+        console.print(f"Code analysis failed: {e}", style="red")
+        sys.exit(1)
+
+
+@cli.command("ai:reset")
+@click.option("--force", is_flag=True, help="Skip confirmation prompt")
+def reset_ai_tables(force: bool):
+    """Drop all AI tables and recreate them fresh."""
+    console.print(Panel.fit(
+        "[bold red]AI Tables Reset[/bold red]\n"
+        "This will permanently delete all AI tables",
+        border_style="red"
+    ))
+    
+    try:
+        with MindsDBClient() as client:
+            if not client.server:
+                console.print("Failed to connect to MindsDB", style="red")
+                sys.exit(1)
+            
+            existing_tables = client.list_ai_tables()
+            
+            if len(existing_tables) == 0:
+                console.print("No AI tables found to reset", style="yellow")
+                return
+            
+            if not force:
+                console.print(f"\nFound {len(existing_tables)} AI tables: {', '.join(existing_tables)}")
+                console.print("This action will permanently delete ALL AI tables.")
+                
+                if not click.confirm("\nAre you sure you want to proceed?"):
+                    console.print("Reset cancelled", style="yellow")
+                    return
+            
+            console.print(f"\nResetting AI tables...", style="blue")
+            
+            drop_success = client.drop_ai_tables()
+            if not drop_success:
+                console.print("Failed to drop existing AI tables", style="red")
+                sys.exit(1)
+            
+            create_success = client.create_ai_tables()
+            if not create_success:
+                console.print("Failed to recreate AI tables", style="red")
+                sys.exit(1)
+            
+            console.print(f"AI tables reset completed successfully!", style="bold green")
+            console.print(f"All 5 AI tables have been recreated and are ready for use", style="green")
+            
+    except Exception as e:
+        console.print(f"Reset failed: {e}", style="red")
+        sys.exit(1)
+
 def _display_search_results(results: list, output_format: str, query: str, 
-                          filters: Dict[str, Any], relevance_threshold: float):
+                          filters: Dict[str, Any], relevance_threshold: float, use_ai_workflow: bool = False):
     """Display search results in the specified format."""
     if output_format == "json":
         console.print(json.dumps(results, indent=2, default=str))
@@ -667,41 +913,113 @@ def _display_search_results(results: list, output_format: str, query: str,
         for i, result in enumerate(results, 1):
             console.print(f"{i}. [bold]{result.get('filepath', 'N/A')}[/bold]")
             console.print(f"   {result.get('chunk_content', '')[:100]}...")
-            console.print(f"   Relevance: {result.get('relevance', 0):.3f}\n")
+            console.print(f"   Relevance: {result.get('relevance', 0):.3f}")
+            
+            if use_ai_workflow:
+                if 'ai_purpose' in result:
+                    console.print(f"   Purpose: {result['ai_purpose']}")
+                if 'ai_explanation' in result:
+                    console.print(f"   Explanation: {result['ai_explanation'][:60]}...")
+                if 'ai_docstring' in result:
+                    console.print(f"   Docstring: {result['ai_docstring'][:60]}...")
+                if 'ai_test_cases' in result:
+                    console.print(f"   Test Cases: {result['ai_test_cases'][:60]}...")
+                if 'ai_match_rationale' in result:
+                    console.print(f"   Match Rationale: {result['ai_match_rationale'][:60]}...")
+            console.print()
     else:
-        table = Table(show_header=True, header_style="bold magenta")
-        table.add_column("Rank", style="cyan", width=4)
-        table.add_column("File", style="green", width=25)
-        table.add_column("Function", style="blue", width=15)
-        table.add_column("Content", style="white", width=40)
-        table.add_column("Relevance", style="yellow", width=8)
-        table.add_column("Language", style="magenta", width=8)
-        
-        for i, result in enumerate(results, 1):
-            content = result.get('chunk_content', '')
-            if len(content) > 37:
-                content = content[:37] + "..."
+        if use_ai_workflow:
+            table = Table(show_header=True, header_style="bold magenta")
+            table.add_column("Rank", style="cyan", width=4)
+            table.add_column("File", style="green", width=15)
+            table.add_column("Function", style="blue", width=10)
+            table.add_column("AI Purpose", style="yellow", width=10)
+            table.add_column("AI Explanation", style="blue", width=25)
+            table.add_column("AI Tests", style="magenta", width=15)
+            table.add_column("Relevance", style="red", width=8)
             
-            filepath = result.get('filepath', 'N/A')
-            function_name = result.get('function_name', 'N/A')
-            language = result.get('language', 'N/A')
+            for i, result in enumerate(results, 1):
+                filepath = result.get('filepath', 'N/A')
+                if len(filepath) > 14:
+                    filepath = filepath[:14] + "..."
+                    
+                function_name = result.get('function_name', 'N/A')
+                if len(function_name) > 9:
+                    function_name = function_name[:9] + "..."
+                
+                ai_purpose = result.get('ai_purpose', 'N/A')
+                if len(ai_purpose) > 9:
+                    ai_purpose = ai_purpose[:9] + "..."
+                
+                ai_explanation = result.get('ai_explanation', 'N/A')
+                if len(ai_explanation) > 24:
+                    ai_explanation = ai_explanation[:24] + "..."
+                
+                ai_tests = result.get('ai_test_cases', 'N/A')
+                if len(ai_tests) > 14:
+                    ai_tests = ai_tests[:14] + "..."
+                
+                table.add_row(
+                    str(i),
+                    filepath,
+                    function_name,
+                    ai_purpose,
+                    ai_explanation,
+                    ai_tests,
+                    f"{result.get('relevance', 0):.3f}"
+                )
             
-            table.add_row(
-                str(i),
-                filepath,
-                function_name,
-                content,
-                f"{result.get('relevance', 0):.3f}",
-                language
-            )
-        
-        console.print(table)
+            console.print(table)
+            
+            console.print(f"\nAdditional AI Analysis:", style="bold blue")
+            for i, result in enumerate(results, 1):
+                console.print(f"\n[bold cyan]Result {i} - {result.get('function_name', 'N/A')}:[/bold cyan]")
+                
+                if 'ai_docstring' in result and result['ai_docstring'] != 'N/A':
+                    docstring = result['ai_docstring']
+                    console.print(f"  [green]Generated Docstring:[/green] {docstring}")
+                
+                if 'ai_match_rationale' in result and result['ai_match_rationale'] != 'N/A':
+                    rationale = result['ai_match_rationale']
+                    console.print(f"  [cyan]Match Rationale:[/cyan] {rationale}")
+        else:
+            table = Table(show_header=True, header_style="bold magenta")
+            table.add_column("Rank", style="cyan", width=4)
+            table.add_column("File", style="green", width=25)
+            table.add_column("Function", style="blue", width=15)
+            table.add_column("Content", style="white", width=40)
+            table.add_column("Relevance", style="yellow", width=8)
+            table.add_column("Language", style="magenta", width=8)
+            
+            for i, result in enumerate(results, 1):
+                content = result.get('chunk_content', '')
+                if len(content) > 37:
+                    content = content[:37] + "..."
+                
+                filepath = result.get('filepath', 'N/A')
+                function_name = result.get('function_name', 'N/A')
+                language = result.get('language', 'N/A')
+                
+                table.add_row(
+                    str(i),
+                    filepath,
+                    function_name,
+                    content,
+                    f"{result.get('relevance', 0):.3f}",
+                    language
+                )
+            
+            console.print(table)
     
     console.print(f"\nSearch Summary:", style="bold")
     console.print(f"   Query: {query}")
     console.print(f"   Results: {len(results)}")
     console.print(f"   Filters: {filters if filters else 'None'}")
     console.print(f"   Min Relevance: {relevance_threshold}")
+    if use_ai_workflow:
+        console.print(f"   AI Enhancement: Enabled", style="green")
+    else:
+        console.print(f"   AI Enhancement: Disabled (use --ai-* flags)", style="dim")
 
 
 if __name__ == "__main__":
