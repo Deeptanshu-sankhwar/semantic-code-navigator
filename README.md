@@ -177,6 +177,39 @@ Inspect the knowledge base structure:
 python main.py kb:schema
 ```
 
+### 8. Manage Repository Sync Jobs
+
+Automatically sync repository changes every 6 hours:
+
+```bash
+# Create a sync job for a repository
+python main.py kb:sync https://github.com/org/repo-name.git
+
+# Create with custom schedule
+python main.py kb:sync https://github.com/org/repo.git --schedule "EVERY 12 HOURS"
+
+# Force recreate existing job
+python main.py kb:sync https://github.com/org/repo.git --force
+
+# List all sync jobs
+python main.py kb:sync:list
+
+# Delete a sync job
+python main.py kb:sync:delete sync_github_com_org_repo_git
+```
+
+**Sync Job Options:**
+- `--branch, -b`: Git branch to sync (default: main)
+- `--schedule, -s`: Job schedule (default: EVERY 6 HOURS)
+- `--force`: Force recreate sync job if exists
+
+The sync job will:
+1. Track the last sync timestamp for each repository
+2. Only ingest new changes since the last sync
+3. Run automatically every 6 hours
+4. Update the knowledge base with new code
+
+
 ## Architecture
 
 ```

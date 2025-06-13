@@ -1,11 +1,13 @@
 """MindsDB client wrapper for knowledge base operations using the official Python SDK."""
 
 import mindsdb_sdk
+import requests
 from typing import List, Dict, Any, Optional
 from rich.console import Console
 from rich.table import Table
 import json
 import pandas as pd
+from datetime import datetime
 
 from .config import config
 from .code_ingestion import CodeIngestionEngine
@@ -403,6 +405,123 @@ class MindsDBClient:
                 
         except Exception as e:
             console.print(f"Repository ingestion failed: {e}", style="red")
+            return False
+    
+    def create_sync_job(self, repo_url: str, branch: str = "main", schedule: str = "EVERY 6 HOURS") -> bool:
+        """Create a scheduled job to sync repository changes using REST API.
+        
+        Creates a job that runs on the specified schedule to ingest new changes since the last sync.
+        Uses MindsDB REST API for job creation.
+        
+        Args:
+            repo_url: URL of the git repository to sync
+            branch: Git branch to sync (default: main)
+            schedule: Job schedule in MindsDB format (default: EVERY 6 HOURS)
+            
+        Returns:
+            bool: True if job creation was successful, False otherwise
+        """
+        try:
+            job_name = f"sync_{repo_url.split('/')[-1].replace('.git', '')}"
+            
+            current_time = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+            
+            job_data = {
+                "job": {
+                    "name": job_name,
+                    "query": f"""
+                        SELECT * FROM {config.kb.name}
+                        WHERE repo = '{repo_url}'
+                        AND metadata->>'last_modified' > (
+                            SELECT MAX(metadata->>'last_modified') 
+                            FROM {config.kb.name} 
+                            WHERE repo = '{repo_url}'
+                        )
+                    """,
+                    "schedule_str": schedule,
+                    "start_at": current_time,
+                    "end_at": current_time
+                }
+            }
+            
+            api_url = f"{config.mindsdb.connection_url}/api/projects/mindsdb/jobs"
+            headers = {"Content-Type": "application/json"}
+            
+            response = requests.post(api_url, json=job_data, headers=headers)
+            
+            if response.status_code == 200:
+                console.print(f"Created sync job '{job_name}' for {repo_url}", style="green")
+                return True
+            else:
+                console.print(f"Failed to create sync job. Status: {response.status_code}, Response: {response.text}", style="red")
+                return False
+            
+        except Exception as e:
+            console.print(f"Failed to create sync job: {e}", style="red")
+            return False
+    
+    def list_sync_jobs(self) -> List[Dict[str, Any]]:
+        """List all repository sync jobs using REST API.
+        
+        Retrieves all jobs from MindsDB and filters for those that start with 'sync_'.
+        Each job entry includes name, schedule, status, and other job information.
+        
+        Returns:
+            List of dictionaries containing job information
+        """
+        try:
+            api_url = f"{config.mindsdb.connection_url}/api/projects/mindsdb/jobs"
+            
+            response = requests.get(api_url)
+            
+            if response.status_code == 200:
+                all_jobs = response.json()
+                
+                sync_jobs = []
+                for job in all_jobs:
+                    if job.get('name', '').startswith('sync_'):
+                        sync_jobs.append({
+                            'name': job.get('name', ''),
+                            'schedule': job.get('schedule_str', ''),
+                            'status': 'active',
+                            'last_run': job.get('start_at', ''),
+                            'next_run': job.get('end_at', '')
+                        })
+                
+                return sync_jobs
+            else:
+                console.print(f"Failed to list jobs. Status: {response.status_code}", style="red")
+                return []
+            
+        except Exception as e:
+            console.print(f"Failed to list sync jobs: {e}", style="red")
+            return []
+    
+    def delete_sync_job(self, job_name: str) -> bool:
+        """Delete a repository sync job using REST API.
+        
+        Removes the sync job using MindsDB REST API.
+        
+        Args:
+            job_name: Name of the job to delete
+            
+        Returns:
+            bool: True if deletion was successful, False otherwise
+        """
+        try:
+            api_url = f"{config.mindsdb.connection_url}/api/projects/mindsdb/jobs/{job_name}"
+            
+            response = requests.delete(api_url)
+            
+            if response.status_code == 200:
+                console.print(f"Deleted sync job '{job_name}'", style="green")
+                return True
+            else:
+                console.print(f"Failed to delete sync job. Status: {response.status_code}, Response: {response.text}", style="red")
+                return False
+            
+        except Exception as e:
+            console.print(f"Failed to delete sync job: {e}", style="red")
             return False
     
     def __enter__(self):
