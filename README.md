@@ -38,7 +38,7 @@ The application demonstrates MindsDB Knowledge Base capabilities including CREAT
    pip install mindsdb
    
    # Docker
-   docker run -p 47334:47334 mindsdb/mindsdb
+   docker-compose up
    ```
 
 2. **OpenAI API Key**: Required for embeddings and reranking
