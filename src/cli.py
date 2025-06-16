@@ -30,7 +30,11 @@ def cli():
 @click.option("--force", is_flag=True, help="Force recreate knowledge base if exists")
 @click.option("--validate-config", is_flag=True, help="Validate configuration before creating KB")
 def init_kb(force: bool, validate_config: bool):
-    """Initialize MindsDB Knowledge Base with embedding/reranking models for semantic code search."""
+    """Initialize MindsDB Knowledge Base with embedding/reranking models for semantic code search.
+    
+    Creates a new knowledge base with configured OpenAI embedding and reranking models.
+    Validates configuration if requested and displays schema information upon successful creation.
+    """
     console.print(Panel.fit(
         "[bold blue]Semantic Code Navigator[/bold blue]\n"
         "Initializing MindsDB Knowledge Base",
@@ -183,7 +187,6 @@ def query_kb(query: str, language: Optional[str], filepath: Optional[str],
                 task = progress.add_task("Searching knowledge base...", total=None)
                 
                 if use_ai_workflow:
-                    # Use the integrated AI workflow
                     results = client.semantic_search_with_ai_analysis(
                         query=query,
                         filters=filters,
@@ -196,7 +199,6 @@ def query_kb(query: str, language: Optional[str], filepath: Optional[str],
                     )
                     progress.update(task, description=f"Found {len(results)} results with AI analysis")
                 else:
-                    # Use regular semantic search
                     results = client.semantic_search(
                         query=query,
                         filters=filters,
@@ -307,7 +309,11 @@ def show_status():
 @cli.command("kb:reset")
 @click.option("--force", is_flag=True, help="Skip confirmation prompt")
 def reset_knowledge_base(force: bool):
-    """Drop existing knowledge base and recreate fresh instance, removing all ingested data."""
+    """Drop existing knowledge base and recreate fresh instance, removing all ingested data.
+    
+    Provides confirmation prompt unless force flag is used. Displays current record count
+    before deletion and recreates a clean knowledge base ready for new data ingestion.
+    """
     console.print(Panel.fit(
         "[bold red]Knowledge Base Reset[/bold red]\n"
         "This will permanently delete all ingested data",

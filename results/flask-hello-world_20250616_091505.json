@@ -1,0 +1,58 @@
+{
+  "repo_name": "flask-hello-world",
+  "repo_url": "https://github.com/miguelgrinberg/flasky",
+  "start_time": "2025-06-16 09:15:05.053549",
+  "end_time": "2025-06-16 09:16:35.867663",
+  "kb_creation_success": true,
+  "kb_creation_time": 7.367472887039185,
+  "kb_creation_error": null,
+  "ingestion_success": true,
+  "ingestion_time": 37.920615911483765,
+  "files_processed": 39,
+  "chunks_extracted": 221,
+  "ingestion_error": null,
+  "batch_size": 20,
+  "indexing_success": true,
+  "indexing_time": 1.2607738971710205,
+  "indexing_error": null,
+  "search_success": true,
+  "search_time": 9.200692653656006,
+  "search_results_count": 9,
+  "search_error": null,
+  "queries_tested": 3,
+  "search_times": [
+    3.132388114929199,
+    3.5285837650299072,
+    2.5397207736968994
+  ],
+  "ai_analysis_success": true,
+  "ai_analysis_time": 16.481689929962158,
+  "ai_analysis_error": null,
+  "peak_memory_mb": 19.3125,
+  "cpu_usage_percent": 0.0,
+  "environment": {
+    "timestamp": "2025-06-16T09:15:05.053717",
+    "python_version": "3.13.3",
+    "platform": "Darwin 24.5.0 (arm64)",
+    "cpu_count": 8,
+    "total_memory_gb": 16.0,
+    "available_memory_gb": 2.9522552490234375,
+    "disk_space_gb": 16.326839447021484,
+    "mindsdb_version": "Latest",
+    "openai_model_embedding": "text-embedding-3-large",
+    "openai_model_reranking": "gpt-4o"
+  },
+  "performance": {
+    "ingestion_rate_chunks_per_second": 5.82796441165063,
+    "ingestion_rate_files_per_second": 1.0284643079383464,
+    "ingestion_time_per_1k_chunks": 171.5864973370306,
+    "search_latency_avg_ms": 3066.8975512186685,
+    "search_latency_p95_ms": 0.0,
+    "search_latency_p99_ms": 0.0,
+    "memory_efficiency_mb_per_1k_chunks": 87.3868778280543,
+    "throughput_queries_per_second": 0.32606240779143014
+  },
+  "language_breakdown": {
+    "python": 221
+  }
+}
