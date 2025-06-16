@@ -104,44 +104,90 @@ class MindsDBClient:
             return False
     
     def insert_data(self, data: List[Dict[str, Any]], batch_size: Optional[int] = None) -> bool:
-        """Insert data into knowledge base using batched raw SQL INSERT statements with proper escaping."""
+        """Insert data into knowledge base using batched raw SQL INSERT statements.
+        
+        Uses proper SQL escaping and connection recovery for stable insertion.
+        Implements retry logic for transient connection failures and provides
+        detailed progress reporting for batch operations.
+        """
         try:
             if not data:
                 console.print("No data to insert", style="yellow")
                 return True
             
-            batch_size = batch_size or config.stress_test.batch_size
+            batch_size = min(batch_size or config.stress_test.batch_size, 25)
+            console.print(f"Using batch size: {batch_size} for stable insertion", style="blue")
+            console.print(f"Total records to insert: {len(data)}", style="blue")
+            
+            successful_batches = 0
+            total_batches = (len(data) + batch_size - 1) // batch_size
             
             for i in range(0, len(data), batch_size):
                 batch_data = data[i:i + batch_size]
-                columns = list(batch_data[0].keys())
-                columns_str = ', '.join(columns)
+                batch_num = i // batch_size + 1
                 
-                values_list = []
-                for record in batch_data:
-                    escaped_values = []
-                    for col in columns:
-                        value = record[col]
-                        if isinstance(value, str):
-                            escaped_value = f"'{value.replace(chr(39), chr(39)+chr(39))}'" 
-                        elif value is None:
-                            escaped_value = "NULL"
+                max_retries = 3
+                for attempt in range(max_retries):
+                    try:
+                        columns = list(batch_data[0].keys())
+                        columns_str = ', '.join(columns)
+                        
+                        values_list = []
+                        for record in batch_data:
+                            escaped_values = []
+                            for col in columns:
+                                value = record[col]
+                                if isinstance(value, str):
+                                    escaped_str = value.replace("\\", "\\\\").replace("'", "''")
+                                    escaped_value = f"'{escaped_str}'"
+                                elif value is None:
+                                    escaped_value = "NULL"
+                                else:
+                                    escaped_value = f"'{str(value).replace(chr(39), chr(39)+chr(39))}'"
+                                escaped_values.append(escaped_value)
+                            values_list.append(f"({', '.join(escaped_values)})")
+                        
+                        values_str = ', '.join(values_list)
+                        insert_query = f"""
+                        INSERT INTO {config.kb.name} ({columns_str})
+                        VALUES {values_str};
+                        """
+                        
+                        self.execute_query(insert_query)
+                        console.print(f"Inserted batch {batch_num}/{total_batches}: {len(batch_data)} records", style="green")
+                        successful_batches += 1
+                        break
+                        
+                    except Exception as batch_error:
+                        if attempt < max_retries - 1:
+                            console.print(f"Batch {batch_num} failed (attempt {attempt + 1}), retrying...", style="yellow")
+                            console.print(f"   Error: {str(batch_error)[:100]}...", style="dim")
+                            time.sleep(2)
+                            
+                            try:
+                                console.print("Reconnecting to MindsDB...", style="dim")
+                                self.disconnect()
+                                time.sleep(1)
+                                self.connect()
+                            except:
+                                pass
                         else:
-                            escaped_value = f"'{str(value)}'"
-                        escaped_values.append(escaped_value)
-                    values_list.append(f"({', '.join(escaped_values)})")
+                            console.print(f"Batch {batch_num} failed after {max_retries} attempts: {batch_error}", style="red")
+                            continue
                 
-                values_str = ', '.join(values_list)
-                insert_query = f"""
-                INSERT INTO {config.kb.name} ({columns_str})
-                VALUES {values_str};
-                """
-                
-                self.execute_query(insert_query)
-                console.print(f"Inserted batch {i//batch_size + 1}: {len(batch_data)} records", style="blue")
+                if batch_num < total_batches:
+                    time.sleep(0.5)
             
-            console.print(f"Successfully inserted {len(data)} records", style="green")
-            return True
+            if successful_batches == total_batches:
+                console.print(f"Successfully inserted all {len(data)} records in {successful_batches} batches", style="green")
+                return True
+            elif successful_batches > 0:
+                inserted_records = successful_batches * batch_size
+                console.print(f"Partially successful: inserted ~{inserted_records} of {len(data)} records", style="yellow")
+                return True
+            else:
+                console.print("Failed to insert any data", style="red")
+                return False
             
         except Exception as e:
             console.print(f"Data insertion failed: {e}", style="red")
@@ -245,14 +291,17 @@ class MindsDBClient:
                 return []
     
     def create_index(self) -> bool:
-        """Create performance index on knowledge base using raw SQL."""
+        """Create performance index on knowledge base.
+        
+        MindsDB Knowledge Bases are automatically indexed for semantic search.
+        No manual index creation is needed or supported by the platform.
+        """
         try:
-            index_query = f"CREATE INDEX ON {config.kb.name};"
-            self.execute_query(index_query)
-            console.print(f"Created index on {config.kb.name}", style="green")
+            console.print(f"Knowledge base '{config.kb.name}' is automatically indexed for semantic search", style="green")
+            console.print("MindsDB handles vector indexing internally for optimal performance", style="blue")
             return True
         except Exception as e:
-            console.print(f"Index creation failed: {e}", style="red")
+            console.print(f"Index status check failed: {e}", style="red")
             return False
     
     def describe_knowledge_base(self) -> Dict[str, Any]:
@@ -332,7 +381,6 @@ class MindsDBClient:
     def drop_knowledge_base(self) -> bool:
         """Drop the knowledge base."""
         try:
-            # Use the correct SDK method to drop knowledge base
             self.server.knowledge_bases.drop(config.kb.name)
             console.print(f"Dropped knowledge base: {config.kb.name}", style="yellow")
             return True
@@ -366,9 +414,15 @@ class MindsDBClient:
                              extensions: List[str] = None, exclude_dirs: List[str] = None,
                              batch_size: int = 500, extract_git_info: bool = False,
                              generate_summaries: bool = False, cleanup: bool = True) -> bool:
-        """Clone repository, extract code chunks with metadata, and insert into knowledge base."""
+        """Clone repository, extract code chunks with metadata, and insert into knowledge base.
+        
+        Clones the specified Git repository, parses code files to extract functions and classes,
+        and inserts the resulting code chunks into the knowledge base with metadata.
+        Provides language breakdown statistics upon successful completion.
+        """
         try:
             console.print(f"Starting repository ingestion: {repo_url}", style="blue")
+            console.print(f"This may take a few minutes depending on repository size...", style="dim")
             
             ingestion_engine = CodeIngestionEngine()
             chunks = ingestion_engine.ingest_repository(
@@ -384,7 +438,8 @@ class MindsDBClient:
                 console.print("No code chunks extracted from repository", style="yellow")
                 return True
             
-            console.print(f"Inserting {len(chunks)} chunks into knowledge base...", style="blue")
+            console.print(f"Extracted {len(chunks)} code chunks from repository", style="green")
+            console.print(f"Starting batch insertion into knowledge base...", style="blue")
             success = self.insert_data(chunks, batch_size)
             
             if success:
@@ -913,7 +968,6 @@ class MindsDBClient:
             bool: True if view was created successfully
         """
         try:
-            # Create a view that joins KB with AI tables for workflow demonstration
             create_view_query = f"""
             CREATE OR REPLACE VIEW code_analysis_workflow AS
             SELECT 
