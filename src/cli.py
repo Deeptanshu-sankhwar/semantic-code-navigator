@@ -913,6 +913,8 @@ def reset_ai_tables(force: bool):
 def _display_search_results(results: list, output_format: str, query: str, 
                           filters: Dict[str, Any], relevance_threshold: float, use_ai_workflow: bool = False):
     """Display search results in the specified format."""
+    from rich.text import Text
+    
     if output_format == "json":
         console.print(json.dumps(results, indent=2, default=str))
     elif output_format == "compact":
@@ -934,44 +936,46 @@ def _display_search_results(results: list, output_format: str, query: str,
                     console.print(f"   Match Rationale: {result['ai_match_rationale'][:60]}...")
             console.print()
     else:
-        if use_ai_workflow:
-            table = Table(show_header=True, header_style="bold magenta")
-            table.add_column("Rank", style="cyan", width=4)
-            table.add_column("File", style="green", width=15)
-            table.add_column("Function", style="blue", width=10)
-            table.add_column("AI Purpose", style="yellow", width=10)
-            table.add_column("AI Explanation", style="blue", width=25)
-            table.add_column("AI Tests", style="magenta", width=15)
-            table.add_column("Relevance", style="red", width=8)
+        terminal_width = console.size.width
+        
+        if use_ai_workflow:            
+            table = Table(show_header=True, header_style="bold magenta", width=terminal_width)
+            table.add_column("Rank", style="cyan", min_width=4, max_width=6)
+            table.add_column("File", style="green", min_width=20, ratio=2)
+            table.add_column("Function", style="blue", min_width=15, ratio=1)
+            table.add_column("AI Purpose", style="yellow", min_width=12, ratio=1)
+            table.add_column("AI Explanation", style="blue", min_width=30, ratio=3)
+            table.add_column("AI Tests", style="magenta", min_width=20, ratio=2)
+            table.add_column("Relevance", style="red", min_width=8, max_width=10)
             
             for i, result in enumerate(results, 1):
                 filepath = result.get('filepath', 'N/A')
-                if len(filepath) > 14:
-                    filepath = filepath[:14] + "..."
+                filepath_text = Text(filepath)
+                filepath_text.overflow = "fold"
                     
                 function_name = result.get('function_name', 'N/A')
-                if len(function_name) > 9:
-                    function_name = function_name[:9] + "..."
+                function_text = Text(function_name)
+                function_text.overflow = "fold"
                 
                 ai_purpose = result.get('ai_purpose', 'N/A')
-                if len(ai_purpose) > 9:
-                    ai_purpose = ai_purpose[:9] + "..."
+                purpose_text = Text(ai_purpose)
+                purpose_text.overflow = "fold"
                 
                 ai_explanation = result.get('ai_explanation', 'N/A')
-                if len(ai_explanation) > 24:
-                    ai_explanation = ai_explanation[:24] + "..."
+                explanation_text = Text(ai_explanation)
+                explanation_text.overflow = "fold"
                 
                 ai_tests = result.get('ai_test_cases', 'N/A')
-                if len(ai_tests) > 14:
-                    ai_tests = ai_tests[:14] + "..."
+                tests_text = Text(ai_tests)
+                tests_text.overflow = "fold"
                 
                 table.add_row(
                     str(i),
-                    filepath,
-                    function_name,
-                    ai_purpose,
-                    ai_explanation,
-                    ai_tests,
+                    filepath_text,
+                    function_text,
+                    purpose_text,
+                    explanation_text,
+                    tests_text,
                     f"{result.get('relevance', 0):.3f}"
                 )
             
@@ -989,28 +993,34 @@ def _display_search_results(results: list, output_format: str, query: str,
                     rationale = result['ai_match_rationale']
                     console.print(f"  [cyan]Match Rationale:[/cyan] {rationale}")
         else:
-            table = Table(show_header=True, header_style="bold magenta")
-            table.add_column("Rank", style="cyan", width=4)
-            table.add_column("File", style="green", width=25)
-            table.add_column("Function", style="blue", width=15)
-            table.add_column("Content", style="white", width=40)
-            table.add_column("Relevance", style="yellow", width=8)
-            table.add_column("Language", style="magenta", width=8)
+            table = Table(show_header=True, header_style="bold magenta", width=terminal_width)
+            table.add_column("Rank", style="cyan", min_width=4, max_width=6)
+            table.add_column("File", style="green", min_width=25, ratio=2)
+            table.add_column("Function", style="blue", min_width=15, ratio=1)
+            table.add_column("Content", style="white", min_width=40, ratio=4)
+            table.add_column("Relevance", style="yellow", min_width=8, max_width=10)
+            table.add_column("Language", style="magenta", min_width=8, max_width=12)
             
             for i, result in enumerate(results, 1):
                 content = result.get('chunk_content', '')
-                if len(content) > 37:
-                    content = content[:37] + "..."
+                content_text = Text(content)
+                content_text.overflow = "fold"
                 
                 filepath = result.get('filepath', 'N/A')
+                filepath_text = Text(filepath)
+                filepath_text.overflow = "fold"
+                
                 function_name = result.get('function_name', 'N/A')
+                function_text = Text(function_name)
+                function_text.overflow = "fold"
+                
                 language = result.get('language', 'N/A')
                 
                 table.add_row(
                     str(i),
-                    filepath,
-                    function_name,
-                    content,
+                    filepath_text,
+                    function_text,
+                    content_text,
                     f"{result.get('relevance', 0):.3f}",
                     language
                 )
