@@ -1019,11 +1019,3 @@ class MindsDBClient:
             console.print(f"Failed to query AI workflow view: {e}", style="red")
             return []
     
-    def __enter__(self):
-        """Context manager entry."""
-        self.connect()
-        return self
-    
-    def __exit__(self, exc_type, exc_val, exc_tb):
-        """Context manager exit."""
-        self.disconnect() 

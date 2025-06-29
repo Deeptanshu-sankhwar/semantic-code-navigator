@@ -511,6 +511,28 @@ The stress test generates detailed markdown reports including:
 
 The stress test is designed to thoroughly validate the system's reliability, performance, and scalability across diverse codebases while providing actionable insights for optimization.
 
+## AI Agents
+
+The Semantic Code Navigator includes a powerful AI agent system that provides specialized code analysis and assistance. These agents have full access to your ingested codebase and can provide expert-level insights in specific domains.
+
+### Agent Features
+
+- **Template-Based Creation**: Pre-configured agent templates for different specializations
+- **Knowledge Base Integration**: Agents have full access to your ingested codebase
+- **Natural Language Interaction**: Query agents with natural language questions
+- **Specialized Expertise**: Each agent is optimized for specific domains (code review, architecture, security)
+- **Rich Output Formatting**: Beautiful formatted responses with structured analysis
+
+### Available Agent Templates
+
+| Template | Specialization | Model | Description |
+|----------|----------------|-------|-------------|
+| `code-reviewer` | Code Review | gpt-4o | Expert code reviewer focusing on security, performance, and best practices |
+| `architect` | System Architecture | gpt-4o | Software architect for system-level analysis and design patterns |
+| `security-auditor` | Security Analysis | gpt-4o | Security expert for vulnerability assessment and compliance |
+
+The agent system transforms your ingested codebase into an interactive knowledge resource, providing expert-level analysis and guidance tailored to your specific code and requirements.
+
 ## Acknowledgments
 
 - [MindsDB](https://mindsdb.com/) for the Knowledge Base platform

@@ -307,4 +307,72 @@ export MINDSDB_PASSWORD="your-password"
 - `1` - General error
 - `2` - Configuration error
 - `3` - Connection error
-- `4` - Data error 
+- `4` - Data error
+
+## Agent Commands
+
+### List Available Templates
+```bash
+python -m src.cli agent list --show-templates
+```
+
+### Create Agent
+```bash
+python -m src.cli agent create AGENT_NAME --template TEMPLATE
+```
+**Templates:** `code-reviewer`, `architect`, `security-auditor`
+
+**Examples:**
+```bash
+python -m src.cli agent create my-reviewer --template code-reviewer
+python -m src.cli agent create my-architect --template architect
+python -m src.cli agent create my-security --template security-auditor
+```
+
+### List Your Agents
+```bash
+python -m src.cli agent list
+```
+
+### Ask Agent Questions
+```bash
+python -m src.cli agent ask AGENT_NAME "QUESTION"
+```
+
+**Examples:**
+```bash
+python -m src.cli agent ask my-reviewer "Review this authentication code"
+python -m src.cli agent ask my-architect "What design patterns are used?"
+python -m src.cli agent ask my-security "Find security vulnerabilities"
+```
+
+### Quick Code Review
+```bash
+python -m src.cli agent review "CODE_HERE"
+```
+
+**Example:**
+```bash
+python -m src.cli agent review "def login(user, pwd): return user == 'admin'"
+```
+
+### Delete Agent
+```bash
+python -m src.cli agent delete AGENT_NAME
+```
+
+## Quick Start
+```bash
+# 1. See available templates
+python -m src.cli agent list --show-templates
+
+# 2. Create agents
+python -m src.cli agent create reviewer --template code-reviewer
+python -m src.cli agent create architect --template architect
+python -m src.cli agent create security --template security-auditor
+
+# 3. Use them
+python -m src.cli agent ask reviewer "Review my authentication function"
+python -m src.cli agent ask architect "What's the overall system design?"
+python -m src.cli agent ask security "Any security issues?"
+```
