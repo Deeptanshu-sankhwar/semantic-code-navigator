@@ -11,6 +11,7 @@ import sys
 
 from .config import config
 from .mindsdb_client import MindsDBClient
+from .agents import AgentManager, CodeReviewAgent, ArchitectureDiscoveryAgent, SecurityAuditAgent, AGENT_TEMPLATES
 
 console = Console()
 
@@ -337,7 +338,6 @@ def reset_knowledge_base(force: bool):
                 console.print(f"\nCurrent knowledge base contains [bold red]{total_records:,}[/bold red] records")
                 console.print("This action will permanently delete ALL data in the knowledge base.")
                 
-                import click
                 if not click.confirm("\nAre you sure you want to proceed?"):
                     console.print("Reset cancelled", style="yellow")
                     return
@@ -688,7 +688,6 @@ def delete_sync_job(job_name: str, force: bool):
         console.print(f"Sync job deletion failed: {e}", style="red")
         sys.exit(1)
 
-
 @cli.command("ai:init")
 @click.option("--force", is_flag=True, help="Force recreate AI tables if they exist")
 def init_ai_tables(force: bool):
@@ -909,6 +908,461 @@ def reset_ai_tables(force: bool):
     except Exception as e:
         console.print(f"Reset failed: {e}", style="red")
         sys.exit(1)
+
+
+@cli.group("agent")
+def agent_commands():
+    """Agent management and interaction commands for specialized AI assistance."""
+    pass
+
+
+@agent_commands.command("create")
+@click.argument("agent_name", required=True)
+@click.option("--template", "-t", required=True, help="Agent template to use", 
+              type=click.Choice(['code-reviewer', 'architect', 'security-auditor']))
+@click.option("--model", help="Override the default model")
+@click.option("--force", is_flag=True, help="Recreate agent if it already exists")
+def create_agent(agent_name: str, template: str, model: Optional[str], force: bool):
+    """Create a specialized agent using a predefined template.
+    
+    Creates an AI agent that has access to your knowledge base and can provide
+    expert analysis in specific domains like code review, architecture, or security.
+    """
+    console.print(Panel.fit(
+        f"[bold blue]Creating Agent: {agent_name}[/bold blue]\n"
+        f"Template: {template}\n"
+        f"Model: {model or 'default (gpt-4o)'}",
+        border_style="blue"
+    ))
+    
+    try:
+        with AgentManager() as agent_manager:
+            if not agent_manager.client.server:
+                console.print("Failed to connect to MindsDB", style="red")
+                sys.exit(1)
+            
+            if force:
+                console.print("Force flag detected, deleting existing agent...", style="yellow")
+                agent_manager.delete_agent(agent_name)
+            
+            kwargs = {}
+            if model:
+                kwargs['model'] = model
+            
+            success = agent_manager.create_agent(agent_name, template, **kwargs)
+            
+            if success:
+                console.print(f"\n[bold green]Agent '{agent_name}' created successfully![/bold green]")
+                console.print(f"Template: {template}")
+                console.print(f"Knowledge Base Access: {config.kb.name}")
+                console.print(f"\nUse 'agent ask {agent_name} \"<question>\"' to interact with the agent")
+            else:
+                console.print(f"Failed to create agent '{agent_name}'", style="red")
+                sys.exit(1)
+                
+    except Exception as e:
+        console.print(f"Agent creation failed: {e}", style="red")
+        sys.exit(1)
+
+
+@agent_commands.command("list")
+@click.option("--show-templates", is_flag=True, help="Show available templates instead of created agents")
+def list_agents(show_templates: bool):
+    """List all created agents or available agent templates."""
+    console.print(Panel.fit(
+        "[bold blue]Agent Management[/bold blue]\n" +
+        ("Available Templates" if show_templates else "Created Agents"),
+        border_style="blue"
+    ))
+    
+    try:
+        with AgentManager() as agent_manager:
+            if show_templates:
+                console.print("\n[bold]Available Agent Templates:[/bold]")
+                agent_manager.display_templates_table()
+                
+                console.print(f"\n[bold blue]Usage:[/bold blue]")
+                console.print("python main.py agent create <name> --template <template>")
+                console.print("Example: python main.py agent create my-reviewer --template code-reviewer")
+                
+            else:
+                if not agent_manager.client.server:
+                    console.print("Failed to connect to MindsDB", style="red")
+                    sys.exit(1)
+                
+                agents = agent_manager.list_agents()
+                
+                if agents:
+                    console.print(f"\n[bold]Created Agents ({len(agents)}):[/bold]")
+                    agent_manager.display_agents_table(agents)
+                    
+                    console.print(f"\n[bold blue]Usage:[/bold blue]")
+                    console.print("python main.py agent ask <agent-name> \"<question>\"")
+                    console.print("python main.py agent delete <agent-name>")
+                else:
+                    console.print("No agents created yet", style="yellow")
+                    console.print("\nCreate an agent with: python main.py agent create <name> --template <template>")
+                    console.print("See available templates with: python main.py agent list --show-templates")
+                
+    except Exception as e:
+        console.print(f"Failed to list agents: {e}", style="red")
+        sys.exit(1)
+
+
+@agent_commands.command("ask")
+@click.argument("agent_name", required=True)
+@click.argument("question", required=True)
+@click.option("--format", "output_format", default="formatted", 
+              type=click.Choice(["formatted", "raw", "json"]), 
+              help="Output format for the response")
+def ask_agent(agent_name: str, question: str, output_format: str):
+    """Ask a question to a specialized agent.
+    
+    Query an agent with natural language questions. The agent will use its
+    specialized knowledge and access to your codebase to provide expert answers.
+    """
+    console.print(Panel.fit(
+        f"[bold blue]Querying Agent: {agent_name}[/bold blue]\n"
+        f"Question: [italic]{question}[/italic]",
+        border_style="blue"
+    ))
+    
+    try:
+        with AgentManager() as agent_manager:
+            if not agent_manager.client.server:
+                console.print("Failed to connect to MindsDB", style="red")
+                sys.exit(1)
+            
+            agent_info = agent_manager.get_agent_info(agent_name)
+            if not agent_info:
+                console.print(f"Agent '{agent_name}' not found", style="red")
+                console.print("List available agents with: python main.py agent list")
+                sys.exit(1)
+            
+            response = agent_manager.query_agent(agent_name, question)
+            
+            if response:
+                console.print(f"\n[bold green]Agent Response:[/bold green]")
+                
+                if output_format == "json":
+                    console.print(json.dumps({"agent": agent_name, "question": question, "response": response}, indent=2))
+                elif output_format == "raw":
+                    console.print(response)
+                else:
+                    console.print(Panel(response, title=f"[bold cyan]{agent_name}[/bold cyan]", 
+                                      border_style="green", expand=False))
+            else:
+                console.print("No response received from agent", style="red")
+                sys.exit(1)
+                
+    except Exception as e:
+        console.print(f"Agent query failed: {e}", style="red")
+        sys.exit(1)
+
+
+@agent_commands.command("delete")
+@click.argument("agent_name", required=True)
+@click.option("--force", is_flag=True, help="Skip confirmation prompt")
+def delete_agent(agent_name: str, force: bool):
+    """Delete a created agent."""
+    console.print(Panel.fit(
+        f"[bold red]Delete Agent: {agent_name}[/bold red]\n"
+        "This will permanently remove the agent",
+        border_style="red"
+    ))
+    
+    try:
+        with AgentManager() as agent_manager:
+            if not agent_manager.client.server:
+                console.print("Failed to connect to MindsDB", style="red")
+                sys.exit(1)
+            
+            agent_info = agent_manager.get_agent_info(agent_name)
+            if not agent_info:
+                console.print(f"Agent '{agent_name}' not found", style="yellow")
+                return
+            
+            if not force:
+                if not click.confirm(f"\nAre you sure you want to delete agent '{agent_name}'?"):
+                    console.print("Deletion cancelled", style="yellow")
+                    return
+            
+            success = agent_manager.delete_agent(agent_name)
+            
+            if success:
+                console.print(f"Agent '{agent_name}' deleted successfully!", style="green")
+            else:
+                console.print(f"Failed to delete agent '{agent_name}'", style="red")
+                sys.exit(1)
+                
+    except Exception as e:
+        console.print(f"Agent deletion failed: {e}", style="red")
+        sys.exit(1)
+
+
+@agent_commands.command("review")
+@click.argument("code_input", required=True)
+@click.option("--agent", default="code_reviewer", help="Name of the code review agent to use")
+@click.option("--context", help="Additional context about the code")
+@click.option("--focus", help="Comma-separated focus areas (security,performance,style)")
+@click.option("--create-agent", is_flag=True, help="Create the code review agent if it doesn't exist")
+def review_code(code_input: str, agent: str, context: Optional[str], 
+                focus: Optional[str], create_agent: bool):
+    """Perform comprehensive code review using the specialized code review agent.
+    
+    This command uses the CodeReviewAgent to provide detailed code analysis with
+    full codebase context. The code_input can be actual code or a function name
+    to search for in the knowledge base.
+    """
+    console.print(Panel.fit(
+        "[bold blue]AI Code Review[/bold blue]\n"
+        "Analyzing code with full codebase context...",
+        border_style="blue"
+    ))
+    
+    try:
+        with CodeReviewAgent(agent) as reviewer:
+            if create_agent:
+                if not reviewer.ensure_agent_exists():
+                    console.print("Failed to create code review agent", style="red")
+                    sys.exit(1)
+            
+            focus_areas = []
+            if focus:
+                focus_areas = [area.strip() for area in focus.split(',')]
+            
+            if len(code_input.split('\n')) > 1 or any(char in code_input for char in ['{', '}', '(', ')']):
+                review_results = reviewer.review_code(code_input, context, focus_areas)
+            else:
+                console.print(f"Searching for function: [cyan]{code_input}[/cyan]")
+                review_results = reviewer.review_function(code_input)
+            
+            if review_results:
+                reviewer.display_review_results(review_results)
+            else:
+                console.print("Code review failed or returned no results", style="red")
+                sys.exit(1)
+                
+    except Exception as e:
+        console.print(f"Code review failed: {e}", style="red")
+        sys.exit(1)
+
+
+@agent_commands.command("architecture")
+@click.option("--focus", help="Focus area for analysis (patterns, scalability, dependencies)")
+@click.option("--agent", default="architecture_analyzer", help="Name of the architecture agent to use")
+@click.option("--create-agent", is_flag=True, help="Create the architecture agent if it doesn't exist")
+@click.option("--discover-patterns", is_flag=True, help="Focus on design pattern discovery")
+def analyze_architecture(focus: Optional[str], agent: str, create_agent: bool, discover_patterns: bool):
+    """Perform deep architecture analysis and system understanding.
+    
+    This command uses the Architecture Discovery Agent to analyze system architecture,
+    discover design patterns, assess component dependencies, and evaluate scalability.
+    """
+    console.print(Panel.fit(
+        "[bold blue]Architecture Discovery Analysis[/bold blue]\n"
+        "Analyzing system architecture and design patterns...",
+        border_style="blue"
+    ))
+    
+    try:
+        with ArchitectureDiscoveryAgent(agent) as analyzer:
+            if create_agent:
+                if not analyzer.ensure_agent_exists():
+                    console.print("Failed to create architecture discovery agent", style="red")
+                    sys.exit(1)
+            
+            if discover_patterns:
+                console.print("Discovering design patterns in codebase...", style="blue")
+                patterns_result = analyzer.discover_design_patterns()
+                if patterns_result:
+                    console.print("\n[bold green]Design Patterns Discovery Results[/bold green]")
+                    
+                    if "patterns_by_category" in patterns_result:
+                        for pattern_category in patterns_result["patterns_by_category"]:
+                            console.print(Panel(
+                                pattern_category["details"],
+                                title=f"[bold cyan]{pattern_category['category']} Patterns[/bold cyan]",
+                                border_style="cyan"
+                            ))
+                else:
+                    console.print("Design pattern discovery failed", style="red")
+                    sys.exit(1)
+            else:
+                console.print(f"Performing architecture analysis...", style="blue")
+                if focus:
+                    console.print(f"Focus area: [cyan]{focus}[/cyan]")
+                
+                analysis_result = analyzer.analyze_system_architecture(focus)
+                if analysis_result:
+                    analyzer.display_architecture_analysis(analysis_result)
+                else:
+                    console.print("Architecture analysis failed", style="red")
+                    sys.exit(1)
+                
+    except Exception as e:
+        console.print(f"Architecture analysis failed: {e}", style="red")
+        sys.exit(1)
+
+
+@agent_commands.command("security")
+@click.option("--audit-type", type=click.Choice(["comprehensive", "authentication", "input-validation"]), 
+              default="comprehensive", help="Type of security audit to perform")
+@click.option("--agent", default="security_auditor", help="Name of the security agent to use")
+@click.option("--create-agent", is_flag=True, help="Create the security agent if it doesn't exist")
+@click.option("--format", "output_format", default="formatted", 
+              type=click.Choice(["formatted", "raw", "json"]), 
+              help="Output format for the results")
+def security_audit(audit_type: str, agent: str, create_agent: bool, output_format: str):
+    """Perform automated security analysis and vulnerability assessment.
+    
+    This command uses the Security Audit Agent to perform comprehensive security
+    analysis including OWASP Top 10 vulnerability detection, authentication review,
+    and input validation assessment.
+    """
+    console.print(Panel.fit(
+        f"[bold red]Security Audit Analysis[/bold red]\n"
+        f"Audit Type: [italic]{audit_type}[/italic]\n"
+        "Analyzing codebase for security vulnerabilities...",
+        border_style="red"
+    ))
+    
+    try:
+        with SecurityAuditAgent(agent) as auditor:
+            if create_agent:
+                if not auditor.ensure_agent_exists():
+                    console.print("Failed to create security audit agent", style="red")
+                    sys.exit(1)
+            
+            audit_result = None
+            
+            if audit_type == "comprehensive":
+                console.print("Performing comprehensive security audit...", style="blue")
+                audit_result = auditor.perform_comprehensive_security_audit()
+            elif audit_type == "authentication":
+                console.print("Auditing authentication systems...", style="blue")
+                audit_result = auditor.audit_authentication_system()
+            elif audit_type == "input-validation":
+                console.print("Auditing input validation...", style="blue")
+                audit_result = auditor.audit_input_validation()
+            
+            if audit_result:
+                if output_format == "json":
+                    import json
+                    console.print(json.dumps(audit_result, indent=2, default=str))
+                elif output_format == "raw":
+                    console.print(audit_result.get("raw_response", "No raw response available"))
+                else:
+                    auditor.display_security_audit_results(audit_result)
+            else:
+                console.print("Security audit failed or returned no results", style="red")
+                sys.exit(1)
+                
+    except Exception as e:
+        console.print(f"Security audit failed: {e}", style="red")
+        sys.exit(1)
+
+
+@agent_commands.command("comprehensive")
+@click.option("--include-architecture", is_flag=True, default=True, help="Include architecture analysis")
+@click.option("--include-security", is_flag=True, default=True, help="Include security audit")
+@click.option("--include-code-review", is_flag=True, default=True, help="Include code review")
+@click.option("--sample-function", help="Sample function to review for demonstration")
+def comprehensive_analysis(include_architecture: bool, include_security: bool, 
+                          include_code_review: bool, sample_function: Optional[str]):
+    """Perform comprehensive analysis using all specialized agents.
+    
+    This command demonstrates the full power of the agent system by running
+    architecture discovery, security audit, and code review analysis on the codebase.
+    """
+    console.print(Panel.fit(
+        "[bold magenta]Comprehensive Multi-Agent Analysis[/bold magenta]\n"
+        "Running architecture, security, and code review analysis...",
+        border_style="magenta"
+    ))
+    
+    results = {
+        "architecture": None,
+        "security": None,
+        "code_review": None
+    }
+    
+    try:
+        if include_architecture:
+            console.print("\n[bold blue]1. Architecture Discovery Analysis[/bold blue]")
+            with ArchitectureDiscoveryAgent() as analyzer:
+                if analyzer.ensure_agent_exists():
+                    arch_result = analyzer.analyze_system_architecture()
+                    if arch_result:
+                        analyzer.display_architecture_analysis(arch_result)
+                        results["architecture"] = arch_result
+                    else:
+                        console.print("Architecture analysis failed", style="yellow")
+                else:
+                    console.print("Failed to create architecture agent", style="yellow")
+        
+        if include_security:
+            console.print("\n[bold red]2. Security Audit Analysis[/bold red]")
+            with SecurityAuditAgent() as auditor:
+                if auditor.ensure_agent_exists():
+                    security_result = auditor.perform_comprehensive_security_audit()
+                    if security_result:
+                        auditor.display_security_audit_results(security_result)
+                        results["security"] = security_result
+                    else:
+                        console.print("Security audit failed", style="yellow")
+                else:
+                    console.print("Failed to create security agent", style="yellow")
+        
+        if include_code_review:
+            console.print("\n[bold green]3. Code Review Analysis[/bold green]")
+            with CodeReviewAgent() as reviewer:
+                if reviewer.ensure_agent_exists():
+                    if sample_function:
+                        review_result = reviewer.review_function(sample_function)
+                    else:
+                        sample_code = "def authenticate_user(username, password): return username == 'admin'"
+                        console.print(f"Reviewing sample code: [dim]{sample_code}[/dim]")
+                        review_result = reviewer.review_code(sample_code)
+                    
+                    if review_result:
+                        reviewer.display_review_results(review_result)
+                        results["code_review"] = review_result
+                    else:
+                        console.print("Code review failed", style="yellow")
+                else:
+                    console.print("Failed to create code review agent", style="yellow")
+        
+        console.print("\n[bold magenta]Analysis Summary[/bold magenta]")
+        summary_table = Table(show_header=True, header_style="bold magenta")
+        summary_table.add_column("Analysis Type", style="cyan")
+        summary_table.add_column("Status", style="green")
+        summary_table.add_column("Key Findings", style="white")
+        
+        for analysis_type, result in results.items():
+            if result:
+                status = "✓ Completed"
+                if analysis_type == "architecture":
+                    findings = "System patterns and components analyzed"
+                elif analysis_type == "security":
+                    total_issues = result.get("total_issues", 0)
+                    findings = f"{total_issues} security issues found"
+                elif analysis_type == "code_review":
+                    findings = "Code quality and security reviewed"
+                else:
+                    findings = "Analysis completed"
+            else:
+                status = "✗ Failed"
+                findings = "No results generated"
+            
+            summary_table.add_row(analysis_type.title(), status, findings)
+        
+        console.print(summary_table)
+        
+    except Exception as e:
+        console.print(f"Comprehensive analysis failed: {e}", style="red")
+        sys.exit(1)
+
 
 def _display_search_results(results: list, output_format: str, query: str, 
                           filters: Dict[str, Any], relevance_threshold: float, use_ai_workflow: bool = False):
