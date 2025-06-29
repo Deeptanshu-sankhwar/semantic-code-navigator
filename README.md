@@ -415,12 +415,12 @@ MIT License - see [LICENSE](LICENSE) file for details.
 
 ## Stress Testing
 
-The project includes a comprehensive stress testing suite that evaluates the complete workflow across 25 GitHub repositories of varying sizes (50 to 3000+ files).
+The project includes a comprehensive stress testing suite that evaluates the complete workflow across 10 GitHub repositories of varying sizes (30 to 120 files).
 
 ### Stress Test Features
 
 - **Complete Workflow Testing**: Tests KB creation, data ingestion, indexing, semantic search, and AI analysis
-- **25 Repository Coverage**: From small Flask apps to large projects like Linux kernel and WebKit
+- **10 Repository Coverage**: From small Flask apps to large projects like Linux kernel and WebKit
 - **Serial Execution**: Tests run one after another to prevent memory issues
 - **Memory Management**: Automatic KB reset after each test to free memory
 - **Real-time Reporting**: Beautiful markdown reports with timestamps and metrics
@@ -440,7 +440,7 @@ The project includes a comprehensive stress testing suite that evaluates the com
 ### Running Stress Tests
 
 ```bash
-# Full stress test (25 repositories, ~4-6 hours)
+# Full stress test (10 repositories)
 python stress_test.py
 
 # View help
@@ -506,7 +506,7 @@ The stress test generates detailed markdown reports including:
 
 - **Embedding Costs**: ~$0.10-0.50 per repository (varies by size)
 - **AI Analysis Costs**: ~$0.05-0.20 per repository
-- **Total Estimated Cost**: $5-15 for full 25-repository test
+- **Total Estimated Cost**: $5-10 for full 10-repository test
 - **No Summary Generation**: Disabled to reduce OpenAI costs
 
 The stress test is designed to thoroughly validate the system's reliability, performance, and scalability across diverse codebases while providing actionable insights for optimization.

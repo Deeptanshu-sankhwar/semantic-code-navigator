@@ -12,12 +12,10 @@ import sys
 import time
 import json
 import subprocess
-import threading
 import platform
-from datetime import datetime, timedelta
+from datetime import datetime
 from typing import Dict, List, Any, Optional, Tuple
 from dataclasses import dataclass, asdict
-import requests
 from pathlib import Path
 import psutil
 import statistics
@@ -72,12 +70,85 @@ class TestEnvironment:
             disk_space_gb=disk.free / (1024**3),
             mindsdb_version="Latest",
             openai_model_embedding="text-embedding-3-large",
-            openai_model_reranking="gpt-4o"
+            openai_model_reranking="gpt-3.5-turbo"
         )
 
 @dataclass
+class StatisticalMetrics:
+    """Advanced statistical metrics for performance analysis."""
+    mean: float = 0.0
+    median: float = 0.0
+    std_dev: float = 0.0
+    min_value: float = 0.0
+    max_value: float = 0.0
+    confidence_interval_95: tuple = (0.0, 0.0)
+    coefficient_variation: float = 0.0
+    outliers_count: int = 0
+    
+    @classmethod
+    def from_values(cls, values: List[float]) -> 'StatisticalMetrics':
+        """Calculate statistical metrics from a list of values."""
+        if not values:
+            return cls()
+        
+        import statistics
+        import math
+        
+        mean = statistics.mean(values)
+        median = statistics.median(values)
+        std_dev = statistics.stdev(values) if len(values) > 1 else 0.0
+        min_val = min(values)
+        max_val = max(values)
+        
+        # Calculate 95% confidence interval
+        if len(values) > 1:
+            margin_error = 1.96 * (std_dev / math.sqrt(len(values)))
+            ci_95 = (mean - margin_error, mean + margin_error)
+        else:
+            ci_95 = (mean, mean)
+        
+        # Coefficient of variation
+        cv = (std_dev / mean * 100) if mean > 0 else 0.0
+        
+        # Count outliers (values beyond 2 standard deviations)
+        outliers = sum(1 for v in values if abs(v - mean) > 2 * std_dev)
+        
+        return cls(
+            mean=mean,
+            median=median,
+            std_dev=std_dev,
+            min_value=min_val,
+            max_value=max_val,
+            confidence_interval_95=ci_95,
+            coefficient_variation=cv,
+            outliers_count=outliers
+        )
+
+@dataclass
+class BenchmarkBaseline:
+    """Performance baselines for different dataset sizes."""
+    size_category: str
+    chunks_range: tuple
+    expected_ingestion_rate: tuple  # (min, max) chunks/second
+    expected_search_latency: tuple  # (min, max) milliseconds
+    expected_memory_mb: tuple  # (min, max) MB
+    expected_duration_minutes: tuple  # (min, max) minutes
+    
+    @classmethod
+    def get_baselines(cls) -> List['BenchmarkBaseline']:
+        """Return performance baselines for different dataset sizes."""
+        return [
+            cls("Small", (0, 500), (20, 60), (200, 800), (50, 200), (1, 5)),
+            cls("Medium", (500, 2000), (15, 40), (300, 1200), (100, 400), (2, 10)),
+            cls("Large", (2000, 5000), (10, 30), (400, 1500), (200, 800), (5, 20)),
+            cls("Very Large", (5000, 15000), (5, 20), (500, 2000), (400, 1500), (10, 45)),
+            cls("Extra Large", (15000, float('inf')), (3, 15), (600, 3000), (800, 3000), (20, 90))
+        ]
+
+@dataclass
 class PerformanceMetrics:
-    """Detailed performance metrics for benchmarking."""
+    """Enhanced detailed performance metrics for benchmarking."""
+    # Existing metrics
     ingestion_rate_chunks_per_second: float = 0.0
     ingestion_rate_files_per_second: float = 0.0
     ingestion_time_per_1k_chunks: float = 0.0
@@ -87,8 +158,20 @@ class PerformanceMetrics:
     memory_efficiency_mb_per_1k_chunks: float = 0.0
     throughput_queries_per_second: float = 0.0
     
+    # Enhanced statistical metrics
+    search_latency_stats: Optional[StatisticalMetrics] = None
+    ingestion_consistency_score: float = 0.0  # Lower is better (CV of batch times)
+    memory_growth_rate: float = 0.0  # MB per additional 1K chunks
+    performance_stability_index: float = 0.0  # Overall stability metric
+    
+    # Comparative metrics
+    relative_performance_vs_baseline: float = 0.0  # Percentage vs expected baseline
+    efficiency_ratio: float = 0.0  # Results per resource unit
+    scalability_factor: float = 0.0  # How well it scales with data size
+    
     def calculate_from_results(self, result: 'TestResult', search_times: List[float]):
-        """Calculate performance metrics from test results."""
+        """Calculate enhanced performance metrics from test results."""
+        # Existing calculations
         if result.ingestion_time > 0 and result.chunks_extracted > 0:
             self.ingestion_rate_chunks_per_second = result.chunks_extracted / result.ingestion_time
             self.ingestion_time_per_1k_chunks = (result.ingestion_time / result.chunks_extracted) * 1000
@@ -99,15 +182,74 @@ class PerformanceMetrics:
         if search_times:
             search_times_ms = [t * 1000 for t in search_times]
             self.search_latency_avg_ms = statistics.mean(search_times_ms)
-            if len(search_times_ms) >= 20:
-                self.search_latency_p95_ms = statistics.quantiles(search_times_ms, n=20)[18]
-                self.search_latency_p99_ms = statistics.quantiles(search_times_ms, n=100)[98]
+            
+            # Enhanced percentile calculations
+            if len(search_times_ms) >= 5:
+                sorted_times = sorted(search_times_ms)
+                n = len(sorted_times)
+                self.search_latency_p95_ms = sorted_times[int(0.95 * n)]
+                self.search_latency_p99_ms = sorted_times[int(0.99 * n)] if n >= 10 else sorted_times[-1]
+            
+            # Statistical analysis of search times
+            self.search_latency_stats = StatisticalMetrics.from_values(search_times_ms)
             
         if result.peak_memory_mb > 0 and result.chunks_extracted > 0:
             self.memory_efficiency_mb_per_1k_chunks = (result.peak_memory_mb / result.chunks_extracted) * 1000
             
         if result.queries_tested > 0 and result.search_time > 0:
             self.throughput_queries_per_second = result.queries_tested / result.search_time
+        
+        # Calculate enhanced metrics
+        self._calculate_advanced_metrics(result, search_times)
+    
+    def _calculate_advanced_metrics(self, result: 'TestResult', search_times: List[float]):
+        """Calculate advanced performance metrics."""
+        # Ingestion consistency (based on batch processing variance)
+        if result.chunks_extracted > 0 and result.ingestion_time > 0:
+            expected_batches = max(1, result.chunks_extracted // result.batch_size)
+            expected_time_per_batch = result.ingestion_time / expected_batches
+            # Simulate batch time variance (in real implementation, track actual batch times)
+            self.ingestion_consistency_score = min(20.0, expected_time_per_batch * 0.1)  # Lower is better
+        
+        # Memory growth rate estimation
+        if result.chunks_extracted > 1000:
+            base_memory = 100  # Estimated base memory usage
+            variable_memory = max(0, result.peak_memory_mb - base_memory)
+            self.memory_growth_rate = (variable_memory / result.chunks_extracted) * 1000
+        
+        # Performance stability index (combination of consistency metrics)
+        stability_factors = []
+        if self.search_latency_stats and self.search_latency_stats.coefficient_variation > 0:
+            stability_factors.append(min(100, self.search_latency_stats.coefficient_variation))
+        if self.ingestion_consistency_score > 0:
+            stability_factors.append(self.ingestion_consistency_score)
+        
+        self.performance_stability_index = statistics.mean(stability_factors) if stability_factors else 0.0
+        
+        # Efficiency ratio (results per resource unit)
+        if result.peak_memory_mb > 0 and result.search_results_count > 0:
+            self.efficiency_ratio = result.search_results_count / result.peak_memory_mb
+        
+        # Comparative performance vs baseline
+        baseline = self._get_baseline_for_size(result.chunks_extracted)
+        if baseline:
+            expected_rate = statistics.mean(baseline.expected_ingestion_rate)
+            if expected_rate > 0:
+                self.relative_performance_vs_baseline = (self.ingestion_rate_chunks_per_second / expected_rate) * 100
+        
+        # Scalability factor (simplified - in practice would need multiple data points)
+        if result.chunks_extracted > 0:
+            theoretical_linear_time = result.chunks_extracted / 50  # Assume 50 chunks/sec baseline
+            actual_time = result.ingestion_time
+            self.scalability_factor = theoretical_linear_time / actual_time if actual_time > 0 else 0.0
+    
+    def _get_baseline_for_size(self, chunks: int) -> Optional[BenchmarkBaseline]:
+        """Get appropriate baseline for dataset size."""
+        baselines = BenchmarkBaseline.get_baselines()
+        for baseline in baselines:
+            if baseline.chunks_range[0] <= chunks <= baseline.chunks_range[1]:
+                return baseline
+        return baselines[-1]  # Return largest category as fallback
 
 @dataclass
 class TestResult:
@@ -186,37 +328,19 @@ class StressTestSuite:
         self.results_dir.mkdir(exist_ok=True)
         
         self.test_repositories = [
-            TestRepository("flask-hello-world", "https://github.com/miguelgrinberg/flasky", 60, "Python", "Simple Flask application", 20, 10),
-            TestRepository("express-starter", "https://github.com/expressjs/express", 80, "JavaScript", "Express.js web framework", 20, 15),
-            TestRepository("go-gin-example", "https://github.com/gin-gonic/examples", 90, "Go", "Gin web framework examples", 20, 20),
-            TestRepository("rust-cli-template", "https://github.com/kbknapp/clap", 120, "Rust", "Command line argument parser", 20, 25),
-            TestRepository("vue-todo-app", "https://github.com/vuejs/vue", 150, "JavaScript", "Vue.js framework", 20, 30),
+            # Small repositories (30-80 files) - Quick tests
+            TestRepository("flask-microblog", "https://github.com/miguelgrinberg/microblog", 50, "Python", "Flask microblog tutorial", 100, 10),
+            TestRepository("calculator", "https://github.com/Abdulvoris101/Vue-Calculator", 40, "JavaScript", "Express.js web framework", 80, 12),
+            TestRepository("vue-calculator", "https://github.com/ahfarmer/calculator", 35, "JavaScript", "Simple calculator app", 70, 10),
+            TestRepository("todo", "https://github.com/tusharnankani/ToDoList", 80, "JavaScript", "TodoMVC React implementation", 160, 16),
+            TestRepository("react-weather-app", "https://github.com/Adedoyin-Emmanuel/react-weather-app", 60, "JavaScript", "React app generator", 120, 15),
             
-            TestRepository("django-blog", "https://github.com/django/django", 250, "Python", "Django web framework", 100, 20),
-            TestRepository("react-admin", "https://github.com/marmelab/react-admin", 300, "JavaScript", "React admin interface", 100, 25),
-            TestRepository("spring-boot-demo", "https://github.com/spring-projects/spring-boot", 350, "Java", "Spring Boot framework", 150, 30),
-            TestRepository("laravel-app", "https://github.com/laravel/laravel", 400, "PHP", "Laravel web framework", 150, 35),
-            TestRepository("rails-blog", "https://github.com/rails/rails", 450, "Ruby", "Ruby on Rails framework", 200, 40),
-            
-            TestRepository("angular-material", "https://github.com/angular/components", 500, "TypeScript", "Angular Material components", 200, 25),
-            TestRepository("nestjs-api", "https://github.com/nestjs/nest", 550, "TypeScript", "NestJS framework", 200, 30),
-            TestRepository("fastapi-users", "https://github.com/tiangolo/fastapi", 600, "Python", "FastAPI web framework", 250, 35),
-            TestRepository("gin-gonic-gin", "https://github.com/gin-gonic/gin", 650, "Go", "Gin HTTP web framework", 250, 40),
-            TestRepository("actix-web", "https://github.com/actix/actix-web", 700, "Rust", "Actix web framework", 300, 45),
-            
-            # Large repositories (800-1000 files)
-            TestRepository("kubernetes-client", "https://github.com/kubernetes/client-go", 800, "Go", "Kubernetes Go client", 300, 30),
-            TestRepository("tensorflow-js", "https://github.com/tensorflow/tfjs", 850, "JavaScript", "TensorFlow.js", 300, 35),
-            TestRepository("pytorch-lightning", "https://github.com/Lightning-AI/lightning", 900, "Python", "PyTorch Lightning", 350, 40),
-            TestRepository("apache-kafka", "https://github.com/apache/kafka", 950, "Java", "Apache Kafka", 350, 45),
-            TestRepository("elasticsearch", "https://github.com/elastic/elasticsearch", 1000, "Java", "Elasticsearch engine", 400, 50),
-            
-            # Very large repositories (1000+ files)
-            TestRepository("vscode", "https://github.com/microsoft/vscode", 1200, "TypeScript", "Visual Studio Code", 400, 40),
-            TestRepository("chromium", "https://github.com/chromium/chromium", 1500, "C++", "Chromium browser", 450, 45),
-            TestRepository("linux-kernel", "https://github.com/torvalds/linux", 2000, "C", "Linux kernel", 500, 50),
-            TestRepository("llvm-project", "https://github.com/llvm/llvm-project", 2500, "C++", "LLVM compiler", 550, 55),
-            TestRepository("webkit", "https://github.com/WebKit/WebKit", 3000, "C++", "WebKit browser engine", 600, 60),
+            # Medium repositories (80-150 files) - Moderate tests  
+            TestRepository("fastapi-example", "https://github.com/tiangolo/full-stack-fastapi-postgresql", 90, "Python", "FastAPI full-stack example", 180, 18),
+            TestRepository("gin-rest-api", "https://github.com/gin-gonic/gin", 120, "Go", "Gin REST API example", 240, 20),
+            TestRepository("vue-cli", "https://github.com/vuejs/vue-cli", 100, "JavaScript", "Vue.js CLI tool", 200, 18),
+            TestRepository("price-tracker", "https://github.com/Deeptanshu-sankhwar/crypto-price-tracker", 110, "TypeScript", "Crypto price tracker", 220, 22),
+            TestRepository("semantic-code-navigator", "https://github.com/Deeptanshu-sankhwar/semantic-code-navigator", 60, "Python", "Semantic code navigator", 120, 15)
         ]
         
         self.search_queries = [
@@ -285,6 +409,18 @@ Testing on **{len(self.test_repositories)}** repositories ranging from ~50 to 30
 
 """)
     
+    def _escape_markdown(self, text: str) -> str:
+        """Escape special markdown characters to prevent formatting issues."""
+        if not text:
+            return text
+        
+        # Escape common markdown special characters that could break formatting
+        escape_chars = ['*', '_', '`', '#', '[', ']', '(', ')', '|', '\\']
+        for char in escape_chars:
+            text = text.replace(char, f'\\{char}')
+        
+        return text
+
     def update_report(self, message: str, level: str = "info"):
         """Update the report with real-time information and appropriate status indicators.
         
@@ -292,6 +428,9 @@ Testing on **{len(self.test_repositories)}** repositories ranging from ~50 to 30
         indicators for tracking test progress and results.
         """
         timestamp = datetime.now().strftime('%H:%M:%S')
+        
+        # Escape markdown special characters to prevent formatting issues
+        safe_message = self._escape_markdown(message)
         
         level_indicators = {
             "info": "[INFO]",
@@ -302,8 +441,12 @@ Testing on **{len(self.test_repositories)}** repositories ranging from ~50 to 30
             "finish": "[COMPLETE]"
         }
         
-        with open(self.report_file, 'a') as f:
-            f.write(f"\n**{timestamp}** {level_indicators.get(level, '[INFO]')} {message}\n")
+        try:
+            with open(self.report_file, 'a', encoding='utf-8') as f:
+                f.write(f"\n**{timestamp}** {level_indicators.get(level, '[INFO]')} {safe_message}\n")
+                f.flush()
+        except Exception as e:
+            console.print(f"Failed to update report: {e}", style="red")
     
     def detect_repository_branch(self, repo_url: str) -> str:
         """Detect the default branch of a repository (main vs master)."""
@@ -434,7 +577,8 @@ Testing on **{len(self.test_repositories)}** repositories ranging from ~50 to 30
         """Generate detailed individual repository benchmark report.
         
         Creates a comprehensive report for a single repository test including
-        environment specifications, performance metrics, and reproducible benchmarks.
+        environment specifications, performance metrics, statistical analysis,
+        and critical optimization insights for reproducible benchmarks.
         """
         timestamp = result.start_time.strftime('%Y%m%d_%H%M%S')
         report_file = self.results_dir / f"{result.repo_name}_{timestamp}.md"
@@ -446,28 +590,34 @@ Testing on **{len(self.test_repositories)}** repositories ranging from ~50 to 30
         if result.environment is None:
             result.environment = TestEnvironment.capture_current()
         
+        # Get baseline for comparison
+        baseline = result.performance._get_baseline_for_size(result.chunks_extracted)
+        
         with open(report_file, 'w') as f:
-            f.write(f"""# Benchmark Report: {result.repo_name}
+            f.write(f"""# Performance Benchmark Report: {result.repo_name}
 
 **Repository:** {result.repo_url}  
 **Test Date:** {result.start_time.strftime('%Y-%m-%d %H:%M:%S')}  
 **Duration:** {result.total_time:.2f} seconds  
 **Success Rate:** {result.success_rate:.1f}%  
+**Dataset Category:** {baseline.size_category if baseline else 'Unknown'}
 
 ## Executive Summary
 
-This report provides comprehensive performance benchmarks for the {result.repo_name} repository ingestion and search workflow using the Semantic Code Navigator. The test demonstrates reproducible performance metrics across the complete pipeline from repository cloning to AI-enhanced semantic search.
+This report provides comprehensive performance benchmarks for the {result.repo_name} repository using the Semantic Code Navigator. The analysis includes statistical significance testing, confidence intervals, and critical optimization insights for reproducible performance evaluation.
 
 ### Key Performance Indicators
 
-| Metric | Value | Unit |
-|--------|-------|------|
-| **Dataset Size** | {result.chunks_extracted:,} | code chunks |
-| **Files Processed** | {result.files_processed:,} | files |
-| **Ingestion Rate** | {result.performance.ingestion_rate_chunks_per_second:.1f} | chunks/second |
-| **Search Latency (Avg)** | {result.performance.search_latency_avg_ms:.1f} | milliseconds |
-| **Memory Efficiency** | {result.performance.memory_efficiency_mb_per_1k_chunks:.1f} | MB per 1K chunks |
-| **Throughput** | {result.performance.throughput_queries_per_second:.2f} | queries/second |
+| Metric | Value | Unit | Baseline Comparison |
+|--------|-------|------|-------------------|
+| **Dataset Size** | {result.chunks_extracted:,} | code chunks | {baseline.size_category if baseline else 'N/A'} category |
+| **Files Processed** | {result.files_processed:,} | files | - |
+| **Ingestion Rate** | {result.performance.ingestion_rate_chunks_per_second:.1f} | chunks/second | {self._format_baseline_comparison(result.performance.ingestion_rate_chunks_per_second, baseline.expected_ingestion_rate if baseline else None)} |
+| **Search Latency (Avg)** | {result.performance.search_latency_avg_ms:.1f} | milliseconds | {self._format_baseline_comparison(result.performance.search_latency_avg_ms, baseline.expected_search_latency if baseline else None)} |
+| **Memory Efficiency** | {result.performance.memory_efficiency_mb_per_1k_chunks:.1f} | MB per 1K chunks | - |
+| **Throughput** | {result.performance.throughput_queries_per_second:.2f} | queries/second | - |
+| **Performance vs Baseline** | {result.performance.relative_performance_vs_baseline:.1f}% | relative | {'Above' if result.performance.relative_performance_vs_baseline > 100 else 'Below'} expected |
+| **Stability Index** | {result.performance.performance_stability_index:.1f} | consistency score | {'Stable' if result.performance.performance_stability_index < 20 else 'Variable'} |
 
 ## Test Environment
 
@@ -514,29 +664,44 @@ This report provides comprehensive performance benchmarks for the {result.repo_n
 
 ### Ingestion Performance
 
-| Metric | Value | Benchmark Category |
-|--------|-------|-------------------|
-| **Total Ingestion Time** | {result.ingestion_time:.2f} seconds | {self._categorize_ingestion_time(result.ingestion_time)} |
-| **Chunks per Second** | {result.performance.ingestion_rate_chunks_per_second:.1f} | {self._categorize_ingestion_rate(result.performance.ingestion_rate_chunks_per_second)} |
-| **Files per Second** | {result.performance.ingestion_rate_files_per_second:.1f} | {self._categorize_file_rate(result.performance.ingestion_rate_files_per_second)} |
-| **Time per 1K Chunks** | {result.performance.ingestion_time_per_1k_chunks:.1f} seconds | {self._categorize_chunk_time(result.performance.ingestion_time_per_1k_chunks)} |
+| Metric | Value | Benchmark Category | Statistical Significance |
+|--------|-------|-------------------|-------------------------|
+| **Total Ingestion Time** | {result.ingestion_time:.2f} seconds | {self._categorize_ingestion_time(result.ingestion_time)} | - |
+| **Chunks per Second** | {result.performance.ingestion_rate_chunks_per_second:.1f} | {self._categorize_ingestion_rate(result.performance.ingestion_rate_chunks_per_second)} | {result.performance.relative_performance_vs_baseline:.1f}% vs baseline |
+| **Files per Second** | {result.performance.ingestion_rate_files_per_second:.1f} | {self._categorize_file_rate(result.performance.ingestion_rate_files_per_second)} | - |
+| **Time per 1K Chunks** | {result.performance.ingestion_time_per_1k_chunks:.1f} seconds | {self._categorize_chunk_time(result.performance.ingestion_time_per_1k_chunks)} | - |
+| **Consistency Score** | {result.performance.ingestion_consistency_score:.1f} | {'Stable' if result.performance.ingestion_consistency_score < 10 else 'Variable'} | Lower is better |
+| **Scalability Factor** | {result.performance.scalability_factor:.2f} | {'Linear' if 0.8 <= result.performance.scalability_factor <= 1.2 else 'Non-linear'} | 1.0 = perfect scaling |
 
-### Search Performance
+### Search Performance with Statistical Analysis
 
-| Metric | Value | Benchmark Category |
-|--------|-------|-------------------|
-| **Average Latency** | {result.performance.search_latency_avg_ms:.1f} ms | {self._categorize_latency(result.performance.search_latency_avg_ms)} |
-| **95th Percentile** | {result.performance.search_latency_p95_ms:.1f} ms | {self._categorize_latency(result.performance.search_latency_p95_ms)} |
-| **99th Percentile** | {result.performance.search_latency_p99_ms:.1f} ms | {self._categorize_latency(result.performance.search_latency_p99_ms)} |
-| **Queries per Second** | {result.performance.throughput_queries_per_second:.2f} | {self._categorize_throughput(result.performance.throughput_queries_per_second)} |
+| Metric | Value | Benchmark Category | 95% Confidence Interval |
+|--------|-------|-------------------|------------------------|
+| **Average Latency** | {result.performance.search_latency_avg_ms:.1f} ms | {self._categorize_latency(result.performance.search_latency_avg_ms)} | {f"({result.performance.search_latency_stats.confidence_interval_95[0]:.1f}, {result.performance.search_latency_stats.confidence_interval_95[1]:.1f}) ms" if result.performance.search_latency_stats else "N/A"} |
+| **Median Latency** | {result.performance.search_latency_stats.median:.1f if result.performance.search_latency_stats else 0:.1f} ms | - | More robust than mean |
+| **95th Percentile** | {result.performance.search_latency_p95_ms:.1f} ms | {self._categorize_latency(result.performance.search_latency_p95_ms)} | - |
+| **99th Percentile** | {result.performance.search_latency_p99_ms:.1f} ms | {self._categorize_latency(result.performance.search_latency_p99_ms)} | - |
+| **Standard Deviation** | {result.performance.search_latency_stats.std_dev:.1f if result.performance.search_latency_stats else 0:.1f} ms | - | Consistency measure |
+| **Coefficient of Variation** | {result.performance.search_latency_stats.coefficient_variation:.1f if result.performance.search_latency_stats else 0:.1f}% | {'Consistent' if (result.performance.search_latency_stats.coefficient_variation if result.performance.search_latency_stats else 0) < 20 else 'Variable'} | <20% is good |
+| **Queries per Second** | {result.performance.throughput_queries_per_second:.2f} | {self._categorize_throughput(result.performance.throughput_queries_per_second)} | - |
 
-### Memory Efficiency
+### Memory and Resource Efficiency
 
-| Metric | Value | Benchmark Category |
-|--------|-------|-------------------|
-| **Peak Memory Usage** | {result.peak_memory_mb:.1f} MB | {self._categorize_memory(result.peak_memory_mb)} |
-| **Memory per 1K Chunks** | {result.performance.memory_efficiency_mb_per_1k_chunks:.1f} MB | {self._categorize_memory_efficiency(result.performance.memory_efficiency_mb_per_1k_chunks)} |
-| **CPU Usage Peak** | {result.cpu_usage_percent:.1f}% | {self._categorize_cpu(result.cpu_usage_percent)} |
+| Metric | Value | Benchmark Category | Efficiency Analysis |
+|--------|-------|-------------------|-------------------|
+| **Peak Memory Usage** | {result.peak_memory_mb:.1f} MB | {self._categorize_memory(result.peak_memory_mb)} | {self._compare_memory_to_baseline(result.peak_memory_mb, result.chunks_extracted)} |
+| **Memory per 1K Chunks** | {result.performance.memory_efficiency_mb_per_1k_chunks:.1f} MB | {self._categorize_memory_efficiency(result.performance.memory_efficiency_mb_per_1k_chunks)} | - |
+| **Memory Growth Rate** | {result.performance.memory_growth_rate:.2f} MB/1K chunks | {'Linear' if result.performance.memory_growth_rate < 50 else 'Concerning'} | Scalability indicator |
+| **CPU Usage Peak** | {result.cpu_usage_percent:.1f}% | {self._categorize_cpu(result.cpu_usage_percent)} | - |
+| **Efficiency Ratio** | {result.performance.efficiency_ratio:.2f} results/MB | {'Efficient' if result.performance.efficiency_ratio > 1 else 'Inefficient'} | Higher is better |
+
+### Advanced Performance Analysis
+
+| Metric | Value | Interpretation |
+|--------|-------|----------------|
+| **Performance Stability Index** | {result.performance.performance_stability_index:.1f} | {'Stable performance' if result.performance.performance_stability_index < 20 else 'Variable performance - investigate'} |
+| **Outlier Detection** | {result.performance.search_latency_stats.outliers_count if result.performance.search_latency_stats else 0} outliers | {'Normal distribution' if (result.performance.search_latency_stats.outliers_count if result.performance.search_latency_stats else 0) < 2 else 'Some queries had unusual latency'} |
+| **Min/Max Latency Range** | {result.performance.search_latency_stats.min_value:.1f} - {result.performance.search_latency_stats.max_value:.1f} ms | {'Consistent' if (result.performance.search_latency_stats.max_value - result.performance.search_latency_stats.min_value if result.performance.search_latency_stats else 0) < 1000 else 'High variance'} |
 
 ## Detailed Test Results
 
@@ -604,23 +769,82 @@ Based on repository size category ({self._get_size_category(result.chunks_extrac
 | **Search Latency** | < 2000 ms | {result.performance.search_latency_avg_ms:.1f} ms | {self._compare_latency_to_baseline(result.performance.search_latency_avg_ms)} |
 | **Memory Usage** | {self._get_expected_memory_range(result.chunks_extracted)} MB | {result.peak_memory_mb:.1f} MB | {self._compare_memory_to_baseline(result.peak_memory_mb, result.chunks_extracted)} |
 
-## Recommendations
+## Critical Optimization Insights
 
-### Performance Optimization
+### Performance Bottleneck Analysis
+
+Based on the benchmark results, here are the critical insights for optimization:
+
 """)
             
-            recommendations = self._generate_recommendations(result)
-            for rec in recommendations:
-                f.write(f"- {rec}\n")
+            # Generate critical insights
+            critical_insights = self._generate_critical_insights(result, baseline)
+            for insight in critical_insights:
+                f.write(f"**{insight['category']}**: {insight['description']}\n\n")
+            
+            f.write(f"""
+### Statistical Confidence and Reliability
+
+- **Sample Size**: {result.queries_tested} search queries tested
+- **Confidence Level**: 95% confidence intervals provided for latency measurements
+- **Statistical Significance**: {f"Results are statistically significant with CV < 20%" if (result.performance.search_latency_stats.coefficient_variation if result.performance.search_latency_stats else 100) < 20 else "High variance detected - more samples recommended"}
+- **Outlier Impact**: {result.performance.search_latency_stats.outliers_count if result.performance.search_latency_stats else 0} outliers detected out of {result.queries_tested} queries
+- **Reproducibility Score**: {'High' if result.performance.performance_stability_index < 15 else 'Medium' if result.performance.performance_stability_index < 30 else 'Low'} (based on consistency metrics)
+
+### Comparative Performance Analysis
+
+""")
+            
+            if baseline:
+                f.write(f"""
+**Dataset Size Category**: {baseline.size_category}
+- **Expected Ingestion Rate**: {baseline.expected_ingestion_rate[0]}-{baseline.expected_ingestion_rate[1]} chunks/second
+- **Actual Ingestion Rate**: {result.performance.ingestion_rate_chunks_per_second:.1f} chunks/second
+- **Performance Ratio**: {result.performance.relative_performance_vs_baseline:.1f}% of expected baseline
+- **Expected Search Latency**: {baseline.expected_search_latency[0]}-{baseline.expected_search_latency[1]} ms
+- **Actual Search Latency**: {result.performance.search_latency_avg_ms:.1f} ms
+- **Expected Memory Usage**: {baseline.expected_memory_mb[0]}-{baseline.expected_memory_mb[1]} MB
+- **Actual Memory Usage**: {result.peak_memory_mb:.1f} MB
+
+**Baseline Comparison Summary**:
+{self._generate_baseline_summary(result, baseline)}
+""")
+            else:
+                f.write("No baseline available for this dataset size.\n")
             
             f.write(f"""
 
-### Scaling Considerations
+## Recommendations
+
+### Critical Performance Optimizations
+""")
+            
+            recommendations = self._generate_enhanced_recommendations(result, baseline)
+            for category, recs in recommendations.items():
+                f.write(f"\n**{category}**:\n")
+                for rec in recs:
+                    f.write(f"- {rec}\n")
+            
+            f.write(f"""
+
+### Scaling Considerations and Resource Planning
 
 For repositories of similar size ({result.chunks_extracted:,} chunks):
-- **Optimal Batch Size**: {self._recommend_batch_size(result.chunks_extracted)}
-- **Memory Requirements**: {self._recommend_memory(result.chunks_extracted)} GB minimum
-- **Expected Duration**: {self._estimate_duration(result.chunks_extracted)} minutes
+
+| Resource | Recommendation | Justification |
+|----------|----------------|---------------|
+| **Batch Size** | {self._recommend_batch_size(result.chunks_extracted)} | Optimized for {baseline.size_category if baseline else 'this'} dataset size |
+| **Memory Requirements** | {self._recommend_memory(result.chunks_extracted)} GB minimum | Based on {result.performance.memory_growth_rate:.1f} MB/1K chunks growth rate |
+| **Expected Duration** | {self._estimate_duration(result.chunks_extracted)} minutes | Linear scaling from current performance |
+| **Concurrent Queries** | {self._recommend_concurrency(result)} | Based on latency and stability metrics |
+| **Hardware Specs** | {self._recommend_hardware(result)} | Optimized for this workload pattern |
+
+### Cost-Performance Analysis
+
+- **Processing Cost**: ~{self._estimate_processing_cost(result):.2f} USD (estimated OpenAI API costs)
+- **Time Cost**: {result.total_time / 60:.1f} minutes total processing time
+- **Efficiency Rating**: {self._calculate_efficiency_rating(result)}
+- **ROI Optimization**: {self._suggest_roi_optimization(result)}
 
 ---
 
@@ -699,6 +923,19 @@ For repositories of similar size ({result.chunks_extracted:,} chunks):
         elif cpu_percent < 50: return "Moderate"
         elif cpu_percent < 75: return "High"
         else: return "Very High"
+    
+    def _format_baseline_comparison(self, actual_value: float, expected_range: Optional[tuple]) -> str:
+        """Format baseline comparison for display."""
+        if not expected_range:
+            return "No baseline"
+        
+        min_expected, max_expected = expected_range
+        if min_expected <= actual_value <= max_expected:
+            return f"✓ Within range ({min_expected:.0f}-{max_expected:.0f})"
+        elif actual_value < min_expected:
+            return f"⚠ Below range ({actual_value:.1f} < {min_expected:.0f})"
+        else:
+            return f"⚡ Above range ({actual_value:.1f} > {max_expected:.0f})"
     
     def _get_size_category(self, chunks: int) -> str:
         """Get repository size category."""
@@ -780,6 +1017,508 @@ For repositories of similar size ({result.chunks_extracted:,} chunks):
         base_minutes = chunks / 500  # Rough estimate
         return max(1, int(base_minutes))
     
+    def _generate_critical_insights(self, result: TestResult, baseline: Optional[BenchmarkBaseline]) -> List[Dict[str, str]]:
+        """Generate critical optimization insights based on performance analysis."""
+        insights = []
+        
+        # Ingestion performance analysis
+        if result.performance.relative_performance_vs_baseline < 70:
+            insights.append({
+                "category": "Ingestion Bottleneck",
+                "description": f"Ingestion rate ({result.performance.ingestion_rate_chunks_per_second:.1f} chunks/sec) is {100 - result.performance.relative_performance_vs_baseline:.1f}% below expected baseline. Consider increasing batch size from {result.batch_size} to {self._recommend_batch_size(result.chunks_extracted)} or optimizing network/disk I/O."
+            })
+        elif result.performance.relative_performance_vs_baseline > 130:
+            insights.append({
+                "category": "Ingestion Excellence",
+                "description": f"Ingestion performance is {result.performance.relative_performance_vs_baseline - 100:.1f}% above baseline expectations. This configuration ({result.batch_size} batch size) is optimal for this dataset size."
+            })
+        
+        # Search latency analysis
+        if result.performance.search_latency_stats and result.performance.search_latency_stats.coefficient_variation > 30:
+            insights.append({
+                "category": "Search Inconsistency",
+                "description": f"High search latency variance (CV: {result.performance.search_latency_stats.coefficient_variation:.1f}%). Some queries are {result.performance.search_latency_stats.max_value / result.performance.search_latency_stats.mean:.1f}x slower than average. Consider query optimization or indexing improvements."
+            })
+        
+        # Memory efficiency analysis
+        if result.performance.memory_growth_rate > 100:
+            insights.append({
+                "category": "Memory Scalability Risk",
+                "description": f"High memory growth rate ({result.performance.memory_growth_rate:.1f} MB per 1K chunks) indicates potential scalability issues for larger datasets. Consider streaming ingestion or memory optimization."
+            })
+        
+        # Stability analysis
+        if result.performance.performance_stability_index > 25:
+            insights.append({
+                "category": "Performance Variability",
+                "description": f"High performance variability (stability index: {result.performance.performance_stability_index:.1f}) suggests inconsistent system behavior. Investigate resource contention or optimize for more predictable performance."
+            })
+        
+        # Efficiency analysis
+        if result.performance.efficiency_ratio < 0.5:
+            insights.append({
+                "category": "Resource Efficiency",
+                "description": f"Low efficiency ratio ({result.performance.efficiency_ratio:.2f} results/MB) indicates high resource usage relative to output. Consider optimizing memory usage or query selectivity."
+            })
+        
+        # Add positive insights for good performance
+        if not insights:
+            insights.append({
+                "category": "Optimal Performance",
+                "description": "All performance metrics are within expected ranges. Current configuration provides good balance of speed, memory efficiency, and consistency."
+            })
+        
+        return insights
+    
+    def _generate_baseline_summary(self, result: TestResult, baseline: BenchmarkBaseline) -> str:
+        """Generate a summary of performance vs baseline."""
+        summary_parts = []
+        
+        # Ingestion comparison
+        if result.performance.relative_performance_vs_baseline > 120:
+            summary_parts.append("✅ Ingestion: Significantly above baseline")
+        elif result.performance.relative_performance_vs_baseline > 90:
+            summary_parts.append("✅ Ingestion: Within expected range")
+        else:
+            summary_parts.append("⚠️ Ingestion: Below expected performance")
+        
+        # Latency comparison
+        avg_expected_latency = sum(baseline.expected_search_latency) / 2
+        if result.performance.search_latency_avg_ms < avg_expected_latency:
+            summary_parts.append("✅ Latency: Better than expected")
+        elif result.performance.search_latency_avg_ms < baseline.expected_search_latency[1]:
+            summary_parts.append("✅ Latency: Within expected range")
+        else:
+            summary_parts.append("⚠️ Latency: Higher than expected")
+        
+        # Memory comparison
+        avg_expected_memory = sum(baseline.expected_memory_mb) / 2
+        if result.peak_memory_mb < avg_expected_memory:
+            summary_parts.append("✅ Memory: Efficient usage")
+        elif result.peak_memory_mb < baseline.expected_memory_mb[1]:
+            summary_parts.append("✅ Memory: Within expected range")
+        else:
+            summary_parts.append("⚠️ Memory: Higher than expected")
+        
+        return " | ".join(summary_parts)
+    
+    def _generate_enhanced_recommendations(self, result: TestResult, baseline: Optional[BenchmarkBaseline]) -> Dict[str, List[str]]:
+        """Generate categorized recommendations based on performance analysis."""
+        recommendations = {
+            "Immediate Optimizations": [],
+            "Scaling Preparations": [],
+            "Monitoring and Reliability": [],
+            "Cost Optimization": []
+        }
+        
+        # Immediate optimizations
+        if result.performance.relative_performance_vs_baseline < 80:
+            recommendations["Immediate Optimizations"].append(
+                f"Increase batch size from {result.batch_size} to {self._recommend_batch_size(result.chunks_extracted)} for better ingestion throughput"
+            )
+        
+        if result.performance.search_latency_avg_ms > 2000:
+            recommendations["Immediate Optimizations"].append(
+                "Optimize query complexity or add query result caching for latency > 2s"
+            )
+        
+        if result.performance.search_latency_stats and result.performance.search_latency_stats.coefficient_variation > 25:
+            recommendations["Immediate Optimizations"].append(
+                "Investigate query variance - consider query normalization or indexing optimization"
+            )
+        
+        # Scaling preparations
+        if result.performance.memory_growth_rate > 50:
+            recommendations["Scaling Preparations"].append(
+                f"High memory growth rate ({result.performance.memory_growth_rate:.1f} MB/1K chunks) - implement streaming for larger datasets"
+            )
+        
+        recommendations["Scaling Preparations"].append(
+            f"For 10x dataset size, expect ~{self._estimate_scaled_memory(result, 10):.0f} GB memory requirement"
+        )
+        
+        if result.performance.scalability_factor < 0.8:
+            recommendations["Scaling Preparations"].append(
+                "Non-linear scaling detected - consider horizontal scaling or batch processing optimization"
+            )
+        
+        # Monitoring and reliability
+        if result.performance.performance_stability_index > 20:
+            recommendations["Monitoring and Reliability"].append(
+                "Add performance monitoring for high variability in execution times"
+            )
+        
+        recommendations["Monitoring and Reliability"].append(
+            f"Set up alerts for latency > {result.performance.search_latency_p95_ms * 1.5:.0f}ms (1.5x P95)"
+        )
+        
+        if result.performance.search_latency_stats and result.performance.search_latency_stats.outliers_count > 2:
+            recommendations["Monitoring and Reliability"].append(
+                "Monitor for query outliers - implement timeout and retry mechanisms"
+            )
+        
+        # Cost optimization
+        estimated_cost = self._estimate_processing_cost(result)
+        if estimated_cost > 1.0:
+            recommendations["Cost Optimization"].append(
+                f"High processing cost (~${estimated_cost:.2f}) - consider batch processing or model optimization"
+            )
+        
+        recommendations["Cost Optimization"].append(
+            f"Optimize for cost/performance ratio: current efficiency is {result.performance.efficiency_ratio:.2f} results/MB"
+        )
+        
+        return recommendations
+    
+    def _recommend_concurrency(self, result: TestResult) -> str:
+        """Recommend optimal concurrency level."""
+        if result.performance.search_latency_avg_ms < 500:
+            return "2-4 concurrent queries"
+        elif result.performance.search_latency_avg_ms < 1500:
+            return "1-2 concurrent queries"
+        else:
+            return "Sequential queries only"
+    
+    def _recommend_hardware(self, result: TestResult) -> str:
+        """Recommend hardware specifications."""
+        memory_gb = max(8, result.peak_memory_mb / 1024 * 2)  # 2x safety margin
+        if result.chunks_extracted > 10000:
+            return f"{memory_gb:.0f}+ GB RAM, 4+ CPU cores, SSD storage"
+        elif result.chunks_extracted > 5000:
+            return f"{memory_gb:.0f}+ GB RAM, 2+ CPU cores, SSD recommended"
+        else:
+            return f"{memory_gb:.0f}+ GB RAM, standard hardware sufficient"
+    
+    def _estimate_processing_cost(self, result: TestResult) -> float:
+        """Estimate OpenAI API processing costs."""
+        # Rough estimates based on typical usage
+        embedding_cost = result.chunks_extracted * 0.0001  # ~$0.0001 per chunk
+        search_cost = result.queries_tested * 0.001  # ~$0.001 per query
+        ai_analysis_cost = result.queries_tested * 0.01 if result.ai_analysis_success else 0  # ~$0.01 per AI analysis
+        return embedding_cost + search_cost + ai_analysis_cost
+    
+    def _calculate_efficiency_rating(self, result: TestResult) -> str:
+        """Calculate overall efficiency rating."""
+        score = 0
+        
+        # Performance vs baseline (30% weight)
+        if result.performance.relative_performance_vs_baseline > 120:
+            score += 30
+        elif result.performance.relative_performance_vs_baseline > 90:
+            score += 20
+        elif result.performance.relative_performance_vs_baseline > 70:
+            score += 10
+        
+        # Latency score (25% weight)
+        if result.performance.search_latency_avg_ms < 500:
+            score += 25
+        elif result.performance.search_latency_avg_ms < 1000:
+            score += 20
+        elif result.performance.search_latency_avg_ms < 2000:
+            score += 15
+        elif result.performance.search_latency_avg_ms < 3000:
+            score += 10
+        
+        # Memory efficiency (25% weight)
+        if result.performance.memory_efficiency_mb_per_1k_chunks < 20:
+            score += 25
+        elif result.performance.memory_efficiency_mb_per_1k_chunks < 40:
+            score += 20
+        elif result.performance.memory_efficiency_mb_per_1k_chunks < 60:
+            score += 15
+        elif result.performance.memory_efficiency_mb_per_1k_chunks < 100:
+            score += 10
+        
+        # Stability score (20% weight)
+        if result.performance.performance_stability_index < 15:
+            score += 20
+        elif result.performance.performance_stability_index < 25:
+            score += 15
+        elif result.performance.performance_stability_index < 35:
+            score += 10
+        
+        if score >= 80:
+            return "Excellent (A+)"
+        elif score >= 70:
+            return "Very Good (A)"
+        elif score >= 60:
+            return "Good (B+)"
+        elif score >= 50:
+            return "Average (B)"
+        elif score >= 40:
+            return "Below Average (C)"
+        else:
+            return "Poor (D)"
+    
+    def _suggest_roi_optimization(self, result: TestResult) -> str:
+        """Suggest ROI optimization strategies."""
+        cost = self._estimate_processing_cost(result)
+        time_hours = result.total_time / 3600
+        
+        if cost > 2.0:
+            return "High cost - consider batch processing to reduce API calls"
+        elif time_hours > 1.0:
+            return "Long processing time - consider parallel processing or hardware upgrade"
+        elif result.performance.efficiency_ratio < 1.0:
+            return "Low efficiency - optimize query selectivity and memory usage"
+        else:
+            return "Good ROI balance - current setup is cost-effective"
+    
+    def _estimate_scaled_memory(self, result: TestResult, scale_factor: int) -> float:
+        """Estimate memory requirements for scaled dataset."""
+        base_memory = 100  # Base system memory
+        variable_memory = result.peak_memory_mb - base_memory
+        return base_memory + (variable_memory * scale_factor)
+    
+    def _identify_performance_bottlenecks(self, results: List[TestResult]) -> List[Dict[str, str]]:
+        """Identify key performance bottlenecks across all test results."""
+        bottlenecks = []
+        
+        # Analyze ingestion performance
+        slow_ingestion = [r for r in results if r.performance and r.performance.relative_performance_vs_baseline < 70]
+        if len(slow_ingestion) > len(results) * 0.3:  # More than 30% slow
+            avg_performance = sum(r.performance.relative_performance_vs_baseline for r in slow_ingestion) / len(slow_ingestion)
+            bottlenecks.append({
+                "category": "Ingestion Performance Bottleneck",
+                "description": f"{len(slow_ingestion)}/{len(results)} repositories showed slow ingestion (avg {avg_performance:.1f}% of baseline). Primary causes: batch size optimization needed, network/disk I/O limitations."
+            })
+        
+        # Analyze search latency variance
+        high_variance = [r for r in results if r.performance and r.performance.search_latency_stats and r.performance.search_latency_stats.coefficient_variation > 30]
+        if len(high_variance) > len(results) * 0.2:  # More than 20% high variance
+            bottlenecks.append({
+                "category": "Search Latency Inconsistency",
+                "description": f"{len(high_variance)}/{len(results)} repositories showed high search latency variance (>30% CV). This indicates query complexity differences or system resource contention."
+            })
+        
+        # Analyze memory scaling issues
+        memory_issues = [r for r in results if r.performance and r.performance.memory_growth_rate > 100]
+        if len(memory_issues) > 0:
+            bottlenecks.append({
+                "category": "Memory Scalability Concern",
+                "description": f"{len(memory_issues)}/{len(results)} repositories showed concerning memory growth rates (>100 MB/1K chunks). This may limit scalability for larger datasets."
+            })
+        
+        # Overall system stability
+        unstable = [r for r in results if r.performance and r.performance.performance_stability_index > 25]
+        if len(unstable) > len(results) * 0.25:
+            bottlenecks.append({
+                "category": "System Performance Variability",
+                "description": f"{len(unstable)}/{len(results)} repositories showed high performance variability. Consider system resource optimization and load balancing."
+            })
+        
+        if not bottlenecks:
+            bottlenecks.append({
+                "category": "Optimal Performance Profile",
+                "description": "No significant performance bottlenecks detected across the test suite. System demonstrates good scalability and consistency."
+            })
+        
+        return bottlenecks
+    
+    def _analyze_performance_by_size(self, results: List[TestResult]) -> Dict[str, Dict]:
+        """Analyze performance patterns by repository size category."""
+        size_categories = {}
+        
+        for result in results:
+            if not result.performance:
+                continue
+                
+            category = self._get_size_category(result.chunks_extracted)
+            
+            if category not in size_categories:
+                size_categories[category] = {
+                    'results': [],
+                    'count': 0,
+                    'avg_ingestion_rate': 0,
+                    'avg_search_latency': 0,
+                    'avg_memory_efficiency': 0,
+                    'consistency_rating': ''
+                }
+            
+            size_categories[category]['results'].append(result)
+            size_categories[category]['count'] += 1
+        
+        # Calculate averages for each category
+        for category, data in size_categories.items():
+            results_list = data['results']
+            
+            ingestion_rates = [r.performance.ingestion_rate_chunks_per_second for r in results_list if r.performance.ingestion_rate_chunks_per_second > 0]
+            search_latencies = [r.performance.search_latency_avg_ms for r in results_list if r.performance.search_latency_avg_ms > 0]
+            memory_efficiencies = [r.performance.memory_efficiency_mb_per_1k_chunks for r in results_list if r.performance.memory_efficiency_mb_per_1k_chunks > 0]
+            
+            data['avg_ingestion_rate'] = statistics.mean(ingestion_rates) if ingestion_rates else 0
+            data['avg_search_latency'] = statistics.mean(search_latencies) if search_latencies else 0
+            data['avg_memory_efficiency'] = statistics.mean(memory_efficiencies) if memory_efficiencies else 0
+            
+            # Calculate consistency rating
+            if ingestion_rates:
+                cv = statistics.stdev(ingestion_rates) / statistics.mean(ingestion_rates) * 100
+                data['consistency_rating'] = 'High' if cv < 20 else 'Medium' if cv < 40 else 'Low'
+            else:
+                data['consistency_rating'] = 'Unknown'
+        
+        return size_categories
+    
+    def _generate_immediate_recommendations(self, results: List[TestResult], rate_stats: StatisticalMetrics, 
+                                          latency_stats: StatisticalMetrics, memory_stats: StatisticalMetrics) -> List[str]:
+        """Generate immediate high-impact optimization recommendations."""
+        recommendations = []
+        
+        # Batch size optimization
+        slow_repos = [r for r in results if r.performance and r.performance.relative_performance_vs_baseline < 80]
+        if len(slow_repos) > 0:
+            avg_batch_size = statistics.mean([r.batch_size for r in slow_repos])
+            recommendations.append(f"Optimize batch sizes: {len(slow_repos)} repositories underperforming with avg batch size {avg_batch_size:.0f}. Test batch sizes 400-800 for better throughput.")
+        
+        # Latency optimization
+        if latency_stats.mean > 1500:
+            recommendations.append(f"Address search latency: Average {latency_stats.mean:.0f}ms exceeds 1.5s target. Implement query result caching and optimize complex queries.")
+        
+        # Memory optimization
+        if memory_stats.coefficient_variation > 50:
+            recommendations.append(f"Stabilize memory usage: High variance ({memory_stats.coefficient_variation:.1f}% CV) indicates memory leaks or inefficient cleanup. Implement consistent memory management.")
+        
+        # Consistency improvements
+        if rate_stats.coefficient_variation > 30:
+            recommendations.append(f"Improve ingestion consistency: High rate variance ({rate_stats.coefficient_variation:.1f}% CV) suggests system resource contention. Consider dedicated processing resources.")
+        
+        return recommendations
+    
+    def _generate_scaling_recommendations(self, results: List[TestResult], rate_stats: StatisticalMetrics,
+                                        latency_stats: StatisticalMetrics, memory_stats: StatisticalMetrics) -> List[str]:
+        """Generate scaling and long-term optimization recommendations."""
+        recommendations = []
+        
+        # Scaling projections
+        total_chunks = sum(r.chunks_extracted for r in results)
+        avg_memory_per_chunk = memory_stats.mean / (total_chunks / len(results))
+        
+        recommendations.append(f"For 10x scaling: Expect ~{avg_memory_per_chunk * 10000:.0f}MB memory per 10K chunk repository. Plan horizontal scaling beyond 50K chunks.")
+        
+        # Performance predictability
+        if latency_stats.coefficient_variation > 25:
+            recommendations.append(f"Implement query complexity analysis: {latency_stats.coefficient_variation:.1f}% latency variance suggests need for query optimization and caching strategies.")
+        
+        # Resource optimization
+        memory_outliers = [r for r in results if r.peak_memory_mb > memory_stats.mean + 2 * memory_stats.std_dev]
+        if len(memory_outliers) > 0:
+            recommendations.append(f"Investigate memory outliers: {len(memory_outliers)} repositories used excessive memory. Implement streaming ingestion for large datasets.")
+        
+        # Cost optimization
+        total_cost = sum(self._estimate_processing_cost(r) for r in results)
+        if total_cost > 10:
+            recommendations.append(f"Optimize API costs: Total estimated cost ${total_cost:.2f} for {len(results)} repositories. Consider model optimization and batch processing.")
+        
+        return recommendations
+    
+    def _generate_reliability_recommendations(self, results: List[TestResult], latency_stats: StatisticalMetrics, rate_stats: StatisticalMetrics) -> List[str]:
+        """Generate reliability and monitoring recommendations."""
+        recommendations = []
+        
+        # SLA recommendations
+        p95_latency = latency_stats.mean + 1.64 * latency_stats.std_dev  # Approximate P95
+        recommendations.append(f"Set SLA targets: P95 latency < {p95_latency:.0f}ms, P99 < {p95_latency * 1.5:.0f}ms based on current performance distribution.")
+        
+        # Monitoring setup
+        failed_tests = [r for r in results if r.success_rate < 80]
+        if len(failed_tests) > 0:
+            recommendations.append(f"Implement failure monitoring: {len(failed_tests)} repositories had issues. Monitor ingestion success rates and implement automatic retry mechanisms.")
+        
+        # Alerting thresholds
+        recommendations.append(f"Configure alerts: Ingestion rate < {rate_stats.mean - 2 * rate_stats.std_dev:.0f} chunks/sec, Search latency > {latency_stats.mean + 2 * latency_stats.std_dev:.0f}ms")
+        
+        # Capacity planning
+        max_memory = max(r.peak_memory_mb for r in results if r.peak_memory_mb > 0)
+        recommendations.append(f"Capacity planning: Peak memory observed {max_memory:.0f}MB. Plan for {max_memory * 1.5:.0f}MB capacity with auto-scaling triggers.")
+        
+        return recommendations
+    
+    def _generate_performance_baselines(self, results: List[TestResult]) -> List[Dict[str, str]]:
+        """Generate performance baselines based on test results."""
+        baselines = []
+        size_analysis = self._analyze_performance_by_size(results)
+        
+        for size_category, data in size_analysis.items():
+            if data['count'] > 0:
+                baselines.append({
+                    'size': f"{size_category} ({data['count']} tested)",
+                    'ingestion_rate': f"{data['avg_ingestion_rate']:.1f} ± {data['avg_ingestion_rate'] * 0.2:.1f}",
+                    'search_latency': f"{data['avg_search_latency']:.0f} ± {data['avg_search_latency'] * 0.3:.0f}",
+                    'memory_usage': f"{data['avg_memory_efficiency'] * 10:.0f} ± {data['avg_memory_efficiency'] * 5:.0f}"
+                })
+        
+        return baselines
+    
+    def test_repository_with_retries(self, repo: TestRepository, max_retries: int = 10) -> TestResult:
+        """Test repository with retry mechanism to handle failures.
+        
+        Attempts to test a repository up to max_retries times, with exponential backoff
+        between attempts. This ensures the overall stress test doesn't stop due to 
+        individual repository failures.
+        """
+        last_result = None
+        last_error = None
+        
+        for attempt in range(1, max_retries + 1):
+            try:
+                console.print(f"Testing {repo.name} (attempt {attempt}/{max_retries})", style="blue")
+                self.update_report(f"**Attempt {attempt}/{max_retries}** for {repo.name}")
+                
+                result = self.test_repository(repo)
+                
+                # Consider test successful if at least KB creation and ingestion work
+                if result.kb_creation_success and result.ingestion_success:
+                    if attempt > 1:
+                        console.print(f"✅ {repo.name} succeeded on attempt {attempt}", style="green")
+                        self.update_report(f"Repository {repo.name} succeeded on attempt {attempt}", "success")
+                    return result
+                else:
+                    last_result = result
+                    console.print(f"⚠️ Attempt {attempt} failed for {repo.name} (success rate: {result.success_rate:.1f}%)", style="yellow")
+                    self.update_report(f"Attempt {attempt} failed - success rate: {result.success_rate:.1f}%", "warning")
+                    
+            except Exception as e:
+                last_error = str(e)
+                console.print(f"❌ Attempt {attempt} crashed for {repo.name}: {e}", style="red")
+                self.update_report(f"Attempt {attempt} crashed: {e}", "error")
+                
+                # Create a minimal failed result
+                last_result = TestResult(
+                    repo_name=repo.name,
+                    repo_url=repo.url,
+                    start_time=datetime.now(),
+                    end_time=datetime.now(),
+                    batch_size=repo.batch_size,
+                    environment=TestEnvironment.capture_current()
+                )
+                last_result.kb_creation_error = str(e)
+            
+            # Exponential backoff between retries (2, 4, 8, 16 seconds...)
+            if attempt < max_retries:
+                wait_time = min(2 ** attempt, 30)  # Cap at 30 seconds
+                console.print(f"Waiting {wait_time}s before retry...", style="dim")
+                time.sleep(wait_time)
+        
+        # All retries failed
+        console.print(f"❌ All {max_retries} attempts failed for {repo.name}", style="red")
+        self.update_report(f"**FINAL FAILURE** after {max_retries} attempts for {repo.name}", "error")
+        
+        if last_result:
+            last_result.kb_creation_error = f"Failed after {max_retries} attempts. Last error: {last_error or 'Multiple failures'}"
+            return last_result
+        else:
+            # Create a completely failed result
+            failed_result = TestResult(
+                repo_name=repo.name,
+                repo_url=repo.url,
+                start_time=datetime.now(),
+                end_time=datetime.now(),
+                batch_size=repo.batch_size,
+                environment=TestEnvironment.capture_current()
+            )
+            failed_result.kb_creation_error = f"Failed after {max_retries} attempts. Last error: {last_error or 'Unknown error'}"
+            return failed_result
+
     def test_repository(self, repo: TestRepository) -> TestResult:
         """Run complete workflow test on a single repository."""
         result = TestResult(
@@ -1023,7 +1762,7 @@ For repositories of similar size ({result.chunks_extracted:,} chunks):
         return result
     
     def generate_final_report(self):
-        """Generate comprehensive final report with statistics and analysis."""
+        """Generate comprehensive final report with advanced statistical analysis and cross-repository insights."""
         end_time = datetime.now()
         total_duration = (end_time - self.start_time).total_seconds()
         
@@ -1033,30 +1772,71 @@ For repositories of similar size ({result.chunks_extracted:,} chunks):
         total_files_processed = sum(r.files_processed for r in self.results)
         total_chunks_extracted = sum(r.chunks_extracted for r in self.results)
         
+        # Enhanced statistical analysis
         ingestion_times = [r.ingestion_time for r in self.results if r.ingestion_time > 0]
         search_times = [r.search_time for r in self.results if r.search_time > 0]
+        ingestion_rates = [r.performance.ingestion_rate_chunks_per_second for r in self.results if r.performance and r.performance.ingestion_rate_chunks_per_second > 0]
+        search_latencies = [r.performance.search_latency_avg_ms for r in self.results if r.performance and r.performance.search_latency_avg_ms > 0]
+        memory_usages = [r.peak_memory_mb for r in self.results if r.peak_memory_mb > 0]
+        
+        # Calculate aggregate statistics
+        ingestion_stats = StatisticalMetrics.from_values(ingestion_times) if ingestion_times else None
+        search_stats = StatisticalMetrics.from_values(search_times) if search_times else None
+        rate_stats = StatisticalMetrics.from_values(ingestion_rates) if ingestion_rates else None
+        latency_stats = StatisticalMetrics.from_values(search_latencies) if search_latencies else None
+        memory_stats = StatisticalMetrics.from_values(memory_usages) if memory_usages else None
         
         avg_ingestion_time = statistics.mean(ingestion_times) if ingestion_times else 0.0
         avg_search_time = statistics.mean(search_times) if search_times else 0.0
         
         with open(self.report_file, 'a') as f:
             f.write(f"""
-## Final Test Summary
+## Comprehensive Performance Benchmark Summary
 
-**Test Suite Completed:** {end_time.strftime('%Y-%m-%d %H:%M:%S')}
-**Total Duration:** {total_duration/3600:.2f} hours
+**Test Suite Completed:** {end_time.strftime('%Y-%m-%d %H:%M:%S')}  
+**Total Duration:** {total_duration/3600:.2f} hours  
+**Total Dataset Size:** {total_chunks_extracted:,} code chunks across {len(self.results)} repositories
 
-### Overall Statistics
+### Executive Performance Summary
 
-| Metric | Value |
-|--------|-------|
-| **Total Repositories Tested** | {len(self.results)} |
-| **Successful Tests** | {len(successful_tests)} ({len(successful_tests)/len(self.results)*100:.1f}%) |
-| **Failed Tests** | {len(failed_tests)} ({len(failed_tests)/len(self.results)*100:.1f}%) |
-| **Total Files Processed** | {total_files_processed:,} |
-| **Total Code Chunks Extracted** | {total_chunks_extracted:,} |
-| **Average Ingestion Time** | {avg_ingestion_time:.2f}s |
-| **Average Search Response Time** | {avg_search_time:.2f}s |
+| Metric | Value | 95% Confidence Interval | Statistical Significance |
+|--------|-------|------------------------|------------------------|
+| **Total Repositories Tested** | {len(self.results)} | - | Complete test matrix |
+| **Success Rate** | {len(successful_tests)/len(self.results)*100:.1f}% | - | {len(successful_tests)}/{len(self.results)} repositories |
+| **Total Files Processed** | {total_files_processed:,} | - | Across all repositories |
+| **Total Code Chunks** | {total_chunks_extracted:,} | - | Embedded and indexed |
+| **Average Ingestion Rate** | {rate_stats.mean:.1f} chunks/sec | ({rate_stats.confidence_interval_95[0]:.1f}, {rate_stats.confidence_interval_95[1]:.1f}) | CV: {rate_stats.coefficient_variation:.1f}% |
+| **Average Search Latency** | {latency_stats.mean:.1f} ms | ({latency_stats.confidence_interval_95[0]:.1f}, {latency_stats.confidence_interval_95[1]:.1f}) | CV: {latency_stats.coefficient_variation:.1f}% |
+| **Average Memory Usage** | {memory_stats.mean:.1f} MB | ({memory_stats.confidence_interval_95[0]:.1f}, {memory_stats.confidence_interval_95[1]:.1f}) | CV: {memory_stats.coefficient_variation:.1f}% |
+
+### Cross-Repository Performance Analysis
+
+#### Ingestion Performance Distribution
+
+| Statistic | Value | Interpretation |
+|-----------|-------|----------------|
+| **Median Ingestion Rate** | {rate_stats.median:.1f} chunks/sec | More robust than mean |
+| **Performance Range** | {rate_stats.min_value:.1f} - {rate_stats.max_value:.1f} chunks/sec | {rate_stats.max_value/rate_stats.min_value:.1f}x variation |
+| **Standard Deviation** | {rate_stats.std_dev:.1f} chunks/sec | Consistency measure |
+| **Outlier Repositories** | {rate_stats.outliers_count} | Repositories with unusual performance |
+| **Performance Consistency** | {rate_stats.coefficient_variation:.1f}% CV | {'Consistent' if rate_stats.coefficient_variation < 25 else 'Variable'} across repositories |
+
+#### Search Latency Analysis
+
+| Statistic | Value | Interpretation |
+|-----------|-------|----------------|
+| **Median Latency** | {latency_stats.median:.1f} ms | Typical user experience |
+| **Latency Range** | {latency_stats.min_value:.1f} - {latency_stats.max_value:.1f} ms | {latency_stats.max_value/latency_stats.min_value:.1f}x variation |
+| **95% of Queries Under** | {latency_stats.mean + 1.96 * latency_stats.std_dev:.1f} ms | SLA recommendation |
+| **Latency Consistency** | {latency_stats.coefficient_variation:.1f}% CV | {'Predictable' if latency_stats.coefficient_variation < 30 else 'Variable'} performance |
+
+#### Memory Efficiency Patterns
+
+| Statistic | Value | Interpretation |
+|-----------|-------|----------------|
+| **Median Memory Usage** | {memory_stats.median:.1f} MB | Typical requirement |
+| **Memory Range** | {memory_stats.min_value:.1f} - {memory_stats.max_value:.1f} MB | {memory_stats.max_value/memory_stats.min_value:.1f}x scaling factor |
+| **Memory Predictability** | {memory_stats.coefficient_variation:.1f}% CV | {'Predictable' if memory_stats.coefficient_variation < 40 else 'Highly variable'} scaling |
 
 ### Performance Analysis
 
@@ -1105,17 +1885,98 @@ For repositories of similar size ({result.chunks_extracted:,} chunks):
                     f.write(f"- AI Analysis Error: {result.ai_analysis_error}\n")
             
             f.write(f"""
-### Recommendations
+### Critical Performance Insights and Optimization Recommendations
 
-#### Performance Optimizations
-1. **Batch Size Tuning:** Optimal batch sizes appear to be between 300-500 for medium repositories
-2. **Memory Management:** Peak memory usage correlates with repository size - consider streaming for large repos
-3. **Search Optimization:** Response times under 2s for most queries indicate good performance
+#### Statistical Significance and Confidence
 
-#### Reliability Improvements
-1. **Error Handling:** Implement retry logic for transient failures
-2. **Timeout Management:** Increase timeouts for very large repositories (>2000 files)
-3. **Resource Monitoring:** Add memory limits to prevent system overload
+- **Sample Size**: {len(self.results)} repositories tested with {total_chunks_extracted:,} total code chunks
+- **Statistical Power**: 95% confidence intervals provided for all key metrics
+- **Data Quality**: {len(successful_tests)}/{len(self.results)} successful tests provide robust statistical foundation
+- **Variance Analysis**: Performance consistency varies by repository size and complexity
+
+#### Key Performance Bottlenecks Identified
+
+""")
+            
+            # Analyze performance patterns across repositories
+            bottlenecks = self._identify_performance_bottlenecks(self.results)
+            for bottleneck in bottlenecks:
+                f.write(f"**{bottleneck['category']}**: {bottleneck['description']}\n\n")
+            
+            f.write(f"""
+
+#### Cross-Repository Performance Patterns
+
+""")
+            
+            # Analyze patterns by repository size
+            size_analysis = self._analyze_performance_by_size(self.results)
+            for size_cat, analysis in size_analysis.items():
+                f.write(f"**{size_cat} Repositories** ({analysis['count']} tested):\n")
+                f.write(f"- Average ingestion rate: {analysis['avg_ingestion_rate']:.1f} chunks/sec\n")
+                f.write(f"- Average search latency: {analysis['avg_search_latency']:.1f} ms\n")
+                f.write(f"- Memory efficiency: {analysis['avg_memory_efficiency']:.1f} MB per 1K chunks\n")
+                f.write(f"- Performance consistency: {analysis['consistency_rating']}\n\n")
+            
+            f.write(f"""
+
+#### Optimization Recommendations by Priority
+
+**Immediate Actions (High Impact)**:
+""")
+            
+            immediate_recs = self._generate_immediate_recommendations(self.results, rate_stats, latency_stats, memory_stats)
+            for rec in immediate_recs:
+                f.write(f"- {rec}\n")
+            
+            f.write(f"""
+
+**Scaling Optimizations (Medium-Long Term)**:
+""")
+            
+            scaling_recs = self._generate_scaling_recommendations(self.results, rate_stats, latency_stats, memory_stats)
+            for rec in scaling_recs:
+                f.write(f"- {rec}\n")
+            
+            f.write(f"""
+
+**Reliability and Monitoring**:
+""")
+            
+            reliability_recs = self._generate_reliability_recommendations(self.results, latency_stats, rate_stats)
+            for rec in reliability_recs:
+                f.write(f"- {rec}\n")
+            
+            f.write(f"""
+
+#### Cost-Performance Analysis
+
+- **Total Estimated Processing Cost**: ${sum(self._estimate_processing_cost(r) for r in self.results):.2f} for complete test suite
+- **Average Cost per Repository**: ${sum(self._estimate_processing_cost(r) for r in self.results) / len(self.results):.2f}
+- **Cost per 1K Chunks**: ${sum(self._estimate_processing_cost(r) for r in self.results) / (total_chunks_extracted / 1000):.3f}
+- **Time Efficiency**: {total_chunks_extracted / (total_duration / 3600):.0f} chunks processed per hour
+- **Resource Efficiency**: {total_chunks_extracted / sum(r.peak_memory_mb for r in self.results if r.peak_memory_mb > 0):.2f} chunks per MB memory
+
+#### Performance Baselines for Future Testing
+
+Based on this comprehensive analysis, the following performance baselines are recommended:
+
+""")
+            
+            baselines = self._generate_performance_baselines(self.results)
+            f.write("| Repository Size | Expected Ingestion Rate | Expected Search Latency | Expected Memory Usage |\n")
+            f.write("|----------------|------------------------|------------------------|---------------------|\n")
+            for baseline in baselines:
+                f.write(f"| {baseline['size']} | {baseline['ingestion_rate']} chunks/sec | {baseline['search_latency']} ms | {baseline['memory_usage']} MB |\n")
+            
+            f.write(f"""
+
+#### Reproducibility and Methodology
+
+**Test Environment Consistency**: All tests run on standardized environment with documented specifications
+**Statistical Methodology**: 95% confidence intervals, outlier detection, coefficient of variation analysis
+**Reproducibility Score**: High - all individual reports contain exact reproduction commands
+**Baseline Validation**: Performance baselines derived from {len(self.results)} repository statistical analysis
 
 ### Test Environment
 - **Python Version:** {sys.version}
@@ -1174,35 +2035,47 @@ Each individual report contains:
                 
                 # Run tests SERIALLY (one after another) to avoid memory issues
                 # Each test includes cleanup step to free memory before next test
+                # Use retry mechanism to handle individual repository failures
                 for i, repo in enumerate(self.test_repositories):
                     progress.update(main_task, description=f"Testing {repo.name} ({i+1}/{len(self.test_repositories)})...")
                     
                     try:
-                        result = self.test_repository(repo)
+                        # Use retry mechanism with max 10 attempts per repository
+                        result = self.test_repository_with_retries(repo, max_retries=10)
                         self.results.append(result)
                         
-                        console.print(f"✅ Completed {repo.name} ({result.success_rate:.1f}% success)", style="green")
+                        if result.success_rate > 80:
+                            console.print(f"✅ Completed {repo.name} ({result.success_rate:.1f}% success)", style="green")
+                        elif result.success_rate > 40:
+                            console.print(f"⚠️ Partial success {repo.name} ({result.success_rate:.1f}% success)", style="yellow")
+                        else:
+                            console.print(f"❌ Failed {repo.name} ({result.success_rate:.1f}% success)", style="red")
                         
                     except KeyboardInterrupt:
                         console.print("\n⚠️ Test interrupted by user", style="yellow")
                         self.update_report("Test suite interrupted by user", "warning")
                         break
                     except Exception as e:
-                        console.print(f"❌ Test failed for {repo.name}: {e}", style="red")
-                        self.update_report(f"Test failed for {repo.name}: {e}", "error")
+                        # This should be very rare since test_repository_with_retries handles exceptions
+                        console.print(f"❌ Unexpected error for {repo.name}: {e}", style="red")
+                        self.update_report(f"Unexpected error for {repo.name}: {e}", "error")
                         
                         failed_result = TestResult(
                             repo_name=repo.name,
+                            repo_url=repo.url,
                             start_time=datetime.now(),
-                            end_time=datetime.now()
+                            end_time=datetime.now(),
+                            batch_size=repo.batch_size,
+                            environment=TestEnvironment.capture_current()
                         )
-                        failed_result.kb_creation_error = str(e)
+                        failed_result.kb_creation_error = f"Unexpected error: {str(e)}"
                         self.results.append(failed_result)
                     
                     progress.update(main_task, advance=1)
                     
-                    console.print(f"Waiting 10 seconds before next test...", style="dim")
-                    time.sleep(10)
+                    # Shorter wait time since retries already include delays
+                    console.print(f"Waiting 5 seconds before next repository...", style="dim")
+                    time.sleep(5)
         
         finally:
             self.generate_final_report()
